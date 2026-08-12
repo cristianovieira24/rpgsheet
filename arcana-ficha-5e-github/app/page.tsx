@@ -100,10 +100,12 @@ import {
 import {
   classSpellAbilities,
   combinedCasterLevel,
+  fitClassLevelsToBudget,
   hasMixedClassEditions,
   isSpellcastingEntry,
   multiclassRequirementFailures,
   normalizeClassLevelEntries,
+  redistributeClassLevel,
   requirementLabel,
   totalClassLevels,
   type ClassLevelEntry,
@@ -876,6 +878,7 @@ export default function HomePage() {
   const classDisplay = classLevelEntries.length
     ? classLevelEntries.map((entry) => `${classes.find((candidate) => candidate.id === entry.classId)?.name ?? entry.classId} ${entry.level}`).join(" / ")
     : "Classe não definida";
+  const allocatedClassLevels = totalClassLevels(classLevelEntries);
   const progression = revisedClassRules ? (classProgressions[character.classId] ?? []) : (legacyClassProgressions[character.classId] ?? []);
   const classFeatureEntries = classLevelEntries.flatMap((entry) => {
     const className = classes.find((candidate) => candidate.id === entry.classId)?.name ?? entry.classId;
@@ -941,10 +944,12 @@ export default function HomePage() {
   const multiclassCandidateFailures = multiclassCandidate
     ? multiclassRequirementFailures([...classLevelEntries, multiclassCandidate], finalAbilities)
     : [];
+  const noClassLevelBudget = classLevelEntries.length >= character.level;
   const canAddMulticlass = Boolean(
     multiclassCandidate
     && classLevelEntries.length > 0
     && classLevelEntries.length < 12
+    && classLevelEntries.length < character.level
     && !classLevelEntries.some((entry) => entry.classId === multiclassCandidate.classId)
     && multiclassCandidateFailures.length === 0
   );
@@ -1073,17 +1078,19 @@ export default function HomePage() {
 
   const updateCharacter = <K extends keyof CharacterState>(key: K, value: CharacterState[K]) => {
     setCharacter((current) => {
-      if (key === "level" && current.classLevels.length) {
-        const requested = Math.max(1, Math.min(20, Number(value)));
-        const otherLevels = totalClassLevels(current.classLevels.slice(1));
-        const classLevels = current.classLevels.map((entry, index) => index === 0 ? { ...entry, level: Math.max(1, requested - otherLevels) } : entry);
-        return { ...current, level: totalClassLevels(classLevels), classLevels };
+      if (key === "level") {
+        const minimum = Math.max(1, current.classLevels.length);
+        const requested = Math.max(minimum, Math.min(20, Number(value)));
+        const classLevels = current.classLevels.length
+          ? fitClassLevelsToBudget(current.classLevels, requested)
+          : current.classLevels;
+        return { ...current, level: requested, classLevels };
       }
       if (key === "classId" && current.classLevels.length) {
         const classId = String(value);
         const duplicateLevel = current.classLevels.slice(1).find((entry) => entry.classId === classId)?.level ?? 0;
         const classLevels = current.classLevels.map((entry, index) => index === 0 ? { ...entry, classId, subclassId: "", level: entry.level + duplicateLevel } : entry).filter((entry, index) => index === 0 || entry.classId !== classId);
-        return { ...current, classId, subclassId: "", classLevels, level: totalClassLevels(classLevels) };
+        return { ...current, classId, subclassId: "", classLevels, level: current.level };
       }
       if (key === "subclassId" && current.classLevels.length) {
         const subclassId = String(value);
@@ -1094,19 +1101,22 @@ export default function HomePage() {
     });
   };
 
-  const updateClassComposition = (updater: (entries: ClassLevelEntry[]) => ClassLevelEntry[]) => {
+  const updateClassComposition = (updater: (entries: ClassLevelEntry[], budget: number) => ClassLevelEntry[]) => {
     setCharacter((current) => {
       const existing = current.classLevels.length
         ? current.classLevels
         : current.classId
           ? [{ id: "class-primary", classId: current.classId, subclassId: current.subclassId, ruleset: current.classRuleset, level: current.level }]
           : [];
-      const next = updater(existing).filter((entry, index, entries) => entries.findIndex((candidate) => candidate.classId === entry.classId) === index);
+      const budget = Math.max(1, Math.min(20, current.level));
+      const unique = updater(existing, budget).filter((entry, index, entries) => entries.findIndex((candidate) => candidate.classId === entry.classId) === index);
+      const admissible = unique.slice(0, Math.min(12, budget));
+      const next = admissible.length ? fitClassLevelsToBudget(admissible, budget) : admissible;
       const primary = next[0];
       return {
         ...current,
         classLevels: next,
-        level: next.length ? totalClassLevels(next) : current.level,
+        level: budget,
         classId: primary?.classId ?? "",
         subclassId: primary?.subclassId ?? "",
         classRuleset: primary?.ruleset ?? current.classRuleset,
@@ -1115,14 +1125,19 @@ export default function HomePage() {
   };
 
   const setTotalCharacterLevel = (requestedLevel: number) => {
-    const target = Math.max(1, Math.min(20, requestedLevel));
-    if (!classLevelEntries.length) {
-      updateCharacter("level", target);
-      return;
-    }
-    updateClassComposition((entries) => {
-      const otherLevels = totalClassLevels(entries.slice(1));
-      return entries.map((entry, index) => index === 0 ? { ...entry, level: Math.max(1, target - otherLevels) } : entry);
+    setCharacter((current) => {
+      const existing = current.classLevels.length
+        ? current.classLevels
+        : current.classId
+          ? [{ id: "class-primary", classId: current.classId, subclassId: current.subclassId, ruleset: current.classRuleset, level: current.level }]
+          : [];
+      const minimum = Math.max(1, existing.length);
+      const target = Math.max(minimum, Math.min(20, requestedLevel));
+      return {
+        ...current,
+        level: target,
+        classLevels: existing.length ? fitClassLevelsToBudget(existing, target) : current.classLevels,
+      };
     });
   };
 
@@ -1146,17 +1161,18 @@ export default function HomePage() {
       const oldPrimary = existing[0];
       const duplicate = existing.slice(1).find((entry) => entry.classId === classId);
       const primaryLevel = Math.min(20, (oldPrimary?.level ?? current.level) + (duplicate?.level ?? 0));
-      const next: ClassLevelEntry[] = [
+      const proposed: ClassLevelEntry[] = [
         { id: oldPrimary?.id ?? "class-primary", classId, subclassId: oldPrimary?.classId === classId && oldPrimary.ruleset === classRuleset ? oldPrimary.subclassId : "", ruleset: classRuleset, level: primaryLevel },
         ...existing.slice(1).filter((entry) => entry.classId !== classId),
       ];
+      const next = fitClassLevelsToBudget(proposed, current.level);
       return {
         ...current,
         classRuleset,
         classId,
         subclassId: next[0].subclassId,
         classLevels: next,
-        level: totalClassLevels(next),
+        level: current.level,
         spellcastingMode: "auto",
         spellcastingProfileId: "none",
         spellcastingRows: [],
@@ -1184,11 +1200,7 @@ export default function HomePage() {
   };
 
   const updateClassEntryLevel = (entryId: string, requestedLevel: number) => {
-    updateClassComposition((entries) => {
-      const otherLevels = entries.filter((entry) => entry.id !== entryId).reduce((sum, entry) => sum + entry.level, 0);
-      const level = Math.max(1, Math.min(20 - otherLevels, requestedLevel));
-      return entries.map((entry) => entry.id === entryId ? { ...entry, level } : entry);
-    });
+    updateClassComposition((entries, budget) => redistributeClassLevel(entries, budget, entryId, requestedLevel));
   };
 
   const removeClassEntry = (entryId: string) => {
@@ -1196,18 +1208,18 @@ export default function HomePage() {
   };
 
   const addMulticlassNow = (classId: string, ruleset: Ruleset) => {
-    updateClassComposition((entries) => {
-      if (!entries.length || entries.some((entry) => entry.classId === classId) || entries.length >= 12) return entries;
+    updateClassComposition((entries, budget) => {
+      if (!entries.length || entries.some((entry) => entry.classId === classId) || entries.length >= 12 || entries.length >= budget) return entries;
       const donorIndex = entries.findIndex((entry) => entry.level > 1);
+      if (donorIndex < 0) return entries;
       const next = entries.map((entry, index) => index === donorIndex ? { ...entry, level: entry.level - 1 } : entry);
-      if (donorIndex < 0 && totalClassLevels(entries) >= 20) return entries;
       return [...next, { id: crypto.randomUUID(), classId, subclassId: "", ruleset, level: 1 }];
     });
     setMulticlassDraftClassId("");
   };
 
   const requestMulticlass = () => {
-    if (!multiclassDraftClassId || classLevelEntries.some((entry) => entry.classId === multiclassDraftClassId)) return;
+    if (!multiclassDraftClassId || noClassLevelBudget || classLevelEntries.some((entry) => entry.classId === multiclassDraftClassId)) return;
     const proposed = [...classLevelEntries, { id: "candidate", classId: multiclassDraftClassId, subclassId: "", ruleset: multiclassDraftRuleset, level: 1 }];
     if (multiclassRequirementFailures(proposed, finalAbilities).length) return;
     const wouldMixEditions = classLevelEntries.some((entry) => entry.ruleset !== multiclassDraftRuleset);
@@ -1803,6 +1815,7 @@ export default function HomePage() {
     if (builderStep === 1 && lineageIsRequired && !character.lineageId) return { ok: false, reason: "Essa espécie exige uma herança." };
     if (builderStep === 1 && speciesChoiceMissing) return { ok: false, reason: speciesChoiceMissing };
     if (builderStep === 2 && !character.classId) return { ok: false, reason: "Escolha uma classe para continuar." };
+    if (builderStep === 2 && allocatedClassLevels !== character.level) return { ok: false, reason: `Distribua exatamente os ${character.level} níveis do personagem entre as classes.` };
     if (builderStep === 3 && !character.backgroundId) return { ok: false, reason: "Escolha um antecedente para continuar." };
     if (builderStep === 3 && revisedSpeciesRules && character.speciesId === "human" && !character.speciesChoices.originFeat) return { ok: false, reason: "Escolha o Talento de Origem extra do Humano." };
     if (builderStep === 3 && humanFeatConflict) return { ok: false, reason: "O talento extra do Humano deve ser diferente do talento do antecedente." };
@@ -1869,7 +1882,8 @@ export default function HomePage() {
         <div className={`edition-rule-banner compact ${revisedClassRules ? "" : "legacy"}`}><BookMarked size={20} /><div><strong>A primeira classe continua sendo especial.</strong><p>Ela define Dados de Vida do 1º nível, salvaguardas e equipamento inicial. Classes adicionadas depois usam as proficiências limitadas da regra de multiclasse.</p></div></div>
         {(["2024", "2014"] as Ruleset[]).map((edition) => <section className={`catalog-edition-section ${edition === "2014" ? "legacy-catalog" : ""}`} key={edition}><div className="edition-catalog-head"><div><span>{edition === "2024" ? "Classes revisadas 2024" : "Classes clássicas 2014"}</span><p>{edition === "2024" ? "Livro do Jogador 2024 · progressão revisada" : "Livro do Jogador 2014 · compatível com subclasses clássicas"}</p></div><small>12 classes</small></div><div className="choice-grid class-grid">{classes.map((entry) => { const selected = character.classId === entry.id && character.classRuleset === edition; return <button key={`${edition}-${entry.id}`} className={`choice-card class-card ${selected ? "selected" : ""}`} onClick={() => requestPrimaryClass(entry.id, edition)}><span className="die-badge">d{entry.die}</span><div><strong>{entry.name}</strong><small>Atributo: {entry.primary}</small></div><span className="catalog-badge">PHB {edition}</span><p>{entry.summary}</p><div className="tag-row">{entry.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></button>; })}</div></section>)}
         {classLevelEntries.length > 0 && <section className="multiclass-builder-panel">
-          <div className="section-heading compact"><div><span className="eyebrow">Composição atual</span><h3>{classDisplay}</h3><p>O nível total é a soma das trilhas. Habilidades e subclasses usam o nível da própria classe, nunca o nível total.</p></div><div className="multiclass-total"><span>NÍVEL TOTAL</span><strong>{character.level}</strong><small>máximo 20</small></div></div>
+          <div className="section-heading compact"><div><span className="eyebrow">Composição atual</span><h3>{classDisplay}</h3><p>O nível total é um orçamento fechado. Alterar uma classe transfere níveis entre as trilhas; nunca aumenta o personagem sem você mudar o nível total.</p></div><div className="multiclass-total"><span>DISTRIBUÍDOS</span><strong>{allocatedClassLevels}/{character.level}</strong><small>orçamento fixo</small></div></div>
+          <div className="class-budget-rule"><Shield size={18} /><div><strong>Exatamente {character.level} níveis disponíveis.</strong><p>Se uma classe subir, outra cede níveis automaticamente. Para aumentar o personagem, altere primeiro o campo Nível total.</p></div></div>
           <div className="multiclass-entry-list">{classLevelEntries.map((entry, index) => {
             const classDefinition = classes.find((candidate) => candidate.id === entry.classId);
             const subclassPool = entry.ruleset === "2024" ? currentSubclasses : [...legacyCoreSubclasses, ...classicSupplementSubclasses];
@@ -1878,14 +1892,14 @@ export default function HomePage() {
             const failure = multiclassFailures.find((candidate) => candidate.classId === entry.classId);
             return <article className={`multiclass-entry ${failure ? "invalid" : ""}`} key={entry.id}>
               <div className="multiclass-entry-main"><span className="die-badge">d{classDefinition?.die ?? 8}</span><div><span className="entry-kind">{index === 0 ? "CLASSE INICIAL" : `MULTICLASSE ${index}`}</span><strong>{classDefinition?.name}</strong><small>PHB {entry.ruleset} · requisito {requirementLabel(entry.classId)}</small></div></div>
-              <label className="multiclass-level-field"><span>Níveis nesta classe</span><input type="number" min={1} max={20 - totalClassLevels(classLevelEntries.filter((candidate) => candidate.id !== entry.id))} value={entry.level} onChange={(event) => updateClassEntryLevel(entry.id, Number(event.target.value))} /></label>
+              <label className="multiclass-level-field"><span>Níveis nesta classe</span><input type="number" min={1} max={Math.max(1, character.level - (classLevelEntries.length - 1))} value={entry.level} disabled={classLevelEntries.length === 1} onChange={(event) => updateClassEntryLevel(entry.id, Number(event.target.value))} /><small>{classLevelEntries.length === 1 ? `Todos os ${character.level} níveis pertencem a esta classe.` : "A diferença será transferida entre as outras classes."}</small></label>
               <label className="multiclass-subclass-field"><span>Subclasse</span><select value={entry.subclassId} onChange={(event) => updateClassEntry(entry.id, { subclassId: event.target.value })}><option value="">{entry.level < unlockLevel ? `Planejar para o nível ${unlockLevel}` : "Ainda não escolhida"}</option>{subclassOptions.map((subclass) => <option value={subclass.id} key={`${subclass.source}-${subclass.id}`}>{subclass.name} · {sourceShort(subclass.source)}</option>)}</select><small>{entry.level < unlockLevel ? `Benefícios começam no nível ${unlockLevel} de ${classDefinition?.name}.` : "Disponível no nível atual da classe."}</small></label>
               <div className={`multiclass-requirement ${failure ? "failed" : "met"}`}>{failure ? <CircleHelp size={16} /> : <Check size={16} />}<span>{failure ? `Ajuste os atributos: ${failure.requirement}` : classLevelEntries.length > 1 ? `Requisito atendido: ${requirementLabel(entry.classId)}` : `Se adicionar multiclasse, esta classe exigirá ${requirementLabel(entry.classId)}.`}</span></div>
               {index > 0 && <button className="bare-button multiclass-remove" aria-label={`Remover ${classDefinition?.name}`} title="Remover esta classe" onClick={() => removeClassEntry(entry.id)}><Trash2 size={16} /></button>}
             </article>;
           })}</div>
           {mixedClassEditions && <div className="mixed-edition-inline"><CircleHelp size={18} /><div><strong>Esta ficha combina regras de 2024 e 2014.</strong><p>O cálculo é permitido, mas essa combinação não foi balanceada como uma progressão única. Confirme as interações com o mestre.</p></div></div>}
-          <div className="multiclass-add-panel"><div><span className="eyebrow">Adicionar outra classe</span><h4>Expanda a progressão</h4><p>Para entrar ou sair de uma classe, todos os requisitos da composição precisam estar em 13 ou mais. A mesma classe não pode ser escolhida duas vezes.</p></div><div className="multiclass-add-controls"><label>Classe<select value={multiclassDraftClassId} onChange={(event) => setMulticlassDraftClassId(event.target.value)}><option value="">Escolha uma classe</option>{classes.filter((entry) => !classLevelEntries.some((current) => current.classId === entry.id)).map((entry) => <option value={entry.id} key={entry.id}>{entry.name} · {requirementLabel(entry.id)}</option>)}</select></label><label>Edição<select value={multiclassDraftRuleset} onChange={(event) => setMulticlassDraftRuleset(event.target.value as Ruleset)}><option value="2024">Revisado 2024</option><option value="2014">Clássico 2014</option></select></label><button className="primary-button" disabled={!canAddMulticlass} title={multiclassCandidateFailures.length ? "A composição ainda não atende aos requisitos de atributo." : "Adicionar multiclasse"} onClick={requestMulticlass}><Plus size={16} />Adicionar classe</button></div>{multiclassDraftClassId && <div className={`candidate-check ${canAddMulticlass ? "valid" : "invalid"}`}><strong>{canAddMulticlass ? "Pode adicionar" : "Ainda não pode adicionar"}</strong><span>{multiclassCandidateFailures.length ? multiclassCandidateFailures.map((failure) => `${classes.find((entry) => entry.id === failure.classId)?.name}: ${failure.requirement}`).join(" · ") : `Requisito ${requirementLabel(multiclassDraftClassId)} atendido.`}</span></div>}</div>
+          <div className="multiclass-add-panel"><div><span className="eyebrow">Adicionar outra classe</span><h4>{noClassLevelBudget ? "Nenhum nível disponível" : "Expanda a progressão"}</h4><p>{noClassLevelBudget ? `Um personagem de nível ${character.level} não pode sustentar mais de ${character.level} classes. Aumente o nível total ou remova uma classe.` : "A nova classe recebe 1 nível retirado automaticamente de uma trilha que tenha níveis disponíveis. Os requisitos de toda a composição também precisam ser atendidos."}</p></div><div className="multiclass-add-controls"><label>Classe<select value={multiclassDraftClassId} onChange={(event) => setMulticlassDraftClassId(event.target.value)} disabled={noClassLevelBudget}><option value="">Escolha uma classe</option>{classes.filter((entry) => !classLevelEntries.some((current) => current.classId === entry.id)).map((entry) => <option value={entry.id} key={entry.id}>{entry.name} · {requirementLabel(entry.id)}</option>)}</select></label><label>Edição<select value={multiclassDraftRuleset} onChange={(event) => setMulticlassDraftRuleset(event.target.value as Ruleset)} disabled={noClassLevelBudget}><option value="2024">Revisado 2024</option><option value="2014">Clássico 2014</option></select></label><button className="primary-button" disabled={!canAddMulticlass} title={noClassLevelBudget ? "Não há nível disponível para abrir outra classe." : multiclassCandidateFailures.length ? "A composição ainda não atende aos requisitos de atributo." : "Adicionar multiclasse"} onClick={requestMulticlass}><Plus size={16} />Adicionar classe</button></div>{multiclassDraftClassId && <div className={`candidate-check ${canAddMulticlass ? "valid" : "invalid"}`}><strong>{canAddMulticlass ? "Pode adicionar" : "Ainda não pode adicionar"}</strong><span>{noClassLevelBudget ? `O orçamento de ${character.level} níveis já está fechado.` : multiclassCandidateFailures.length ? multiclassCandidateFailures.map((failure) => `${classes.find((entry) => entry.id === failure.classId)?.name}: ${failure.requirement}`).join(" · ") : `Requisito ${requirementLabel(multiclassDraftClassId)} atendido.`}</span></div>}</div>
         </section>}
       </div>
     );
@@ -2103,13 +2117,15 @@ export default function HomePage() {
     const viewedFeatures = focusedProgression.filter((feature) => feature.level === viewedLevel);
     const viewedMagic = focusedRows[viewedLevel - 1];
     const viewedUnlocked = viewedLevel <= focusedEntry.level;
-    const hypotheticalTotalLevel = Math.min(20, character.level - focusedEntry.level + viewedLevel);
+    const maximumFocusedLevel = character.level - (classLevelEntries.length - 1);
+    const canApplyViewedLevel = viewedLevel <= maximumFocusedLevel;
+    const requiredTotalLevel = viewedLevel + classLevelEntries.length - 1;
     const focusedSpellStat = spellStatsByClass.find((stat) => stat.entry.id === focusedEntry.id);
     return (
       <div className="view-enter progression-view multiclass-progression-view">
         <div className="page-title"><div><span className="eyebrow">Progressão multiclasse</span><h1>Cada classe cresce na própria trilha.</h1><p>O nível total controla proficiência e truques. O nível de cada classe libera suas habilidades, subclasse e magias preparadas ou conhecidas.</p></div><button className="ghost-button" onClick={() => { setBuilderStep(2); navigate("criador"); }}><Network size={17} />Gerenciar classes</button></div>
 
-        <section className="multiclass-track-picker"><div className="module-head"><div><span className="eyebrow">Composição · nível total {character.level}</span><h2>{classDisplay}</h2><p>Escolha uma trilha para consultar ou planejar. Alterar uma delas recalcula o total automaticamente.</p></div><span className={`requirement-pill ${multiclassFailures.length ? "required" : "complete"}`}>{multiclassFailures.length ? "REQUISITOS PENDENTES" : "COMPOSIÇÃO VÁLIDA"}</span></div><div className="multiclass-track-grid">{classLevelEntries.map((entry, index) => { const definition = classes.find((candidate) => candidate.id === entry.classId); const active = entry.id === focusedEntry.id; return <button key={entry.id} className={active ? "active" : ""} onClick={() => { setProgressionClassEntryId(entry.id); setSelectedProgressionLevel(entry.level); }}><span>{index === 0 ? "INICIAL" : `CLASSE ${index + 1}`}</span><strong>{definition?.name}</strong><small>Nível {entry.level} · {entry.ruleset} · d{definition?.die}</small><i style={{ width: `${entry.level / 20 * 100}%` }} /></button>; })}</div></section>
+        <section className="multiclass-track-picker"><div className="module-head"><div><span className="eyebrow">Composição · {allocatedClassLevels}/{character.level} níveis distribuídos</span><h2>{classDisplay}</h2><p>Escolha uma trilha para consultar ou redistribuir. O nível total permanece fixo; uma classe só cresce usando níveis cedidos pelas outras.</p></div><span className={`requirement-pill ${multiclassFailures.length ? "required" : "complete"}`}>{multiclassFailures.length ? "REQUISITOS PENDENTES" : "ORÇAMENTO FECHADO"}</span></div><div className="multiclass-track-grid">{classLevelEntries.map((entry, index) => { const definition = classes.find((candidate) => candidate.id === entry.classId); const active = entry.id === focusedEntry.id; return <button key={entry.id} className={active ? "active" : ""} onClick={() => { setProgressionClassEntryId(entry.id); setSelectedProgressionLevel(entry.level); }}><span>{index === 0 ? "INICIAL" : `CLASSE ${index + 1}`}</span><strong>{definition?.name}</strong><small>Nível {entry.level} · {entry.ruleset} · d{definition?.die}</small><i style={{ width: `${entry.level / character.level * 100}%` }} /></button>; })}</div></section>
 
         <section className="multiclass-magic-overview"><div className="module-head"><div><span className="eyebrow">Motor inteligente de magia</span><h2>Espaços combinados; repertórios separados.</h2><p>Você aprende e prepara magias como membro individual de cada classe. Apenas os espaços comuns são combinados. Magia de Pacto permanece separada e recupera conforme Bruxo.</p></div>{character.spellcastingMode === "manual" && <span className="requirement-pill required">EXCEÇÃO MANUAL</span>}</div><div className="magic-engine-grid"><article><span>Nível de conjurador efetivo</span><strong>{sharedCasterLevel || "—"}</strong><small>Completo + metade/terço conforme classe, subclasse e edição.</small></article><article className="shared-slots"><span>{character.spellcastingMode === "manual" ? "Espaços personalizados" : "Espaços compartilhados"}</span><div>{displayedSharedSpellcastingRow?.slots.some(Boolean) ? displayedSharedSpellcastingRow.slots.map((count, index) => count ? <b key={index}>{index + 1}º × {count}</b> : null) : <small>Nenhum espaço comum.</small>}</div></article>{pactRows.map(({ entry, row }) => <article className="pact-slots" key={entry.id}><span>Magia de Pacto · Bruxo {entry.level}</span><strong>{row?.pactSlots ? `${row.pactSlots} × ${row.pactLevel}º` : "—"}</strong><small>Separados; retornam em Descanso Curto ou Longo.</small></article>)}</div><div className="class-casting-grid">{spellStatsByClass.map((stat) => <article key={stat.entry.id}><span>{stat.className} {stat.entry.level}<small>{stat.entry.ruleset}</small></span><dl><div><dt>Atributo</dt><dd>{stat.ability?.toUpperCase() ?? "—"}</dd></div><div><dt>CD</dt><dd>{stat.dc}</dd></div><div><dt>Ataque</dt><dd>{signed(stat.attack)}</dd></div></dl></article>)}</div></section>
 
@@ -2117,7 +2133,7 @@ export default function HomePage() {
 
         <section className="level-navigator-panel"><div className="module-head"><div><span className="eyebrow">Níveis de {focusedClass?.name} 1–20</span><h2>Investigue a trilha da classe</h2><p>O marcador atual usa o nível de {focusedClass?.name}; a proficiência continua usando o nível total do personagem.</p></div><span className="requirement-pill complete">NÍVEL {viewedLevel} EM FOCO</span></div><div className="level-navigator">{Array.from({ length: 20 }, (_, index) => index + 1).map((level) => { const features = focusedProgression.filter((feature) => feature.level === level); const magic = focusedRows[level - 1]; const changesMagic = Boolean(magic?.pactSlots || magic?.slots.some(Boolean) || magic?.cantrips || magic?.prepared); return <button key={level} className={`${level === focusedEntry.level ? "current" : ""} ${level === viewedLevel ? "selected" : ""} ${level > focusedEntry.level ? "future" : ""}`} onClick={() => setSelectedProgressionLevel(level)}><span>{level}</span><div><strong>{focusedClass?.name} {level}</strong><small>{features.length ? features.map((feature) => feature.name).join(" · ") : changesMagic ? "A conjuração da classe evolui" : "Progressão contínua"}</small></div></button>; })}</div></section>
 
-        <section className="level-inspector"><div className="level-inspector-head"><div><span className="eyebrow">Leitura da classe</span><h2>{focusedClass?.name} {viewedLevel}</h2><p>{viewedUnlocked ? `Este nível já faz parte da ficha. Nível total atual: ${character.level}.` : `Prévia: se apenas esta trilha mudar, o personagem iria para o nível total ${hypotheticalTotalLevel}.`}</p></div>{viewedLevel !== focusedEntry.level && <button className="primary-button" onClick={() => updateClassEntryLevel(focusedEntry.id, viewedLevel)}>Definir {focusedClass?.name} como nível {viewedLevel}</button>}</div><div className="level-inspector-grid"><article><span className="inspector-label">Estrutura</span><dl><div><dt>Nível da classe</dt><dd>{viewedLevel}</dd></div><div><dt>Nível total projetado</dt><dd>{hypotheticalTotalLevel}</dd></div><div><dt>Proficiência projetada</dt><dd>{signed(proficiency(hypotheticalTotalLevel))}</dd></div><div><dt>Dado de Vida</dt><dd>d{focusedClass?.die}</dd></div></dl></article><article className="level-features"><span className="inspector-label">Habilidades recebidas</span>{viewedFeatures.length ? viewedFeatures.map((feature) => <button key={`${feature.level}-${feature.name}`} onClick={() => setActiveFeature({ ...feature, unlocked: viewedUnlocked })}><strong>{feature.name}</strong><small>{feature.summary}</small><ChevronRight size={16} /></button>) : <div className="level-empty"><strong>Nenhuma habilidade nova</strong><p>Dados de Vida e recursos anteriores ainda acompanham este nível.</p></div>}</article><article><span className="inspector-label">Magia desta classe</span><dl><div><dt>Truques da classe</dt><dd>{viewedMagic?.cantrips ?? "—"}</dd></div><div><dt>{focusedProfile.preparedLabel}</dt><dd>{viewedMagic?.prepared ?? "por fórmula"}</dd></div></dl><div className="viewed-slots">{focusedProfile.kind === "pact" && viewedMagic?.pactSlots ? <span>{viewedMagic.pactSlots} espaços de Pacto de {viewedMagic.pactLevel}º</span> : <small>Os espaços comuns reais aparecem no motor combinado acima.</small>}</div></article></div><label className="progression-note"><span>Anotação de {focusedClass?.name} {viewedLevel}</span><textarea value={character.progressionNotes[`${focusedEntry.id}:${viewedLevel}`] ?? ""} onChange={(event) => updateCharacter("progressionNotes", { ...character.progressionNotes, [`${focusedEntry.id}:${viewedLevel}`]: event.target.value })} placeholder="Talento, escolha de subclasse, regra do mestre ou lembrete desta trilha…" /></label></section>
+        <section className="level-inspector"><div className="level-inspector-head"><div><span className="eyebrow">Leitura da classe</span><h2>{focusedClass?.name} {viewedLevel}</h2><p>{viewedUnlocked ? `Este nível já faz parte da trilha de ${focusedClass?.name}.` : canApplyViewedLevel ? `Pode ser aplicado sem alterar o nível total ${character.level}; a diferença será retirada das outras classes.` : `Não cabe no orçamento atual. Mantendo todas as classes, o personagem precisaria ser pelo menos nível ${requiredTotalLevel}.`}</p></div>{viewedLevel !== focusedEntry.level && <button className="primary-button" disabled={!canApplyViewedLevel} title={canApplyViewedLevel ? "Redistribuir níveis sem alterar o nível total" : `Aumente o nível total para pelo menos ${requiredTotalLevel}`} onClick={() => updateClassEntryLevel(focusedEntry.id, viewedLevel)}>{canApplyViewedLevel ? `Redistribuir para ${focusedClass?.name} ${viewedLevel}` : `Exige nível total ${requiredTotalLevel}`}</button>}</div><div className="level-inspector-grid"><article><span className="inspector-label">Estrutura</span><dl><div><dt>Nível da classe</dt><dd>{viewedLevel}</dd></div><div><dt>Orçamento total</dt><dd>{character.level}</dd></div><div><dt>Máximo nesta composição</dt><dd>{maximumFocusedLevel}</dd></div><div><dt>Proficiência do personagem</dt><dd>{signed(proficiency(character.level))}</dd></div><div><dt>Dado de Vida</dt><dd>d{focusedClass?.die}</dd></div></dl></article><article className="level-features"><span className="inspector-label">Habilidades recebidas</span>{viewedFeatures.length ? viewedFeatures.map((feature) => <button key={`${feature.level}-${feature.name}`} onClick={() => setActiveFeature({ ...feature, unlocked: viewedUnlocked })}><strong>{feature.name}</strong><small>{feature.summary}</small><ChevronRight size={16} /></button>) : <div className="level-empty"><strong>Nenhuma habilidade nova</strong><p>Dados de Vida e recursos anteriores ainda acompanham este nível.</p></div>}</article><article><span className="inspector-label">Magia desta classe</span><dl><div><dt>Truques da classe</dt><dd>{viewedMagic?.cantrips ?? "—"}</dd></div><div><dt>{focusedProfile.preparedLabel}</dt><dd>{viewedMagic?.prepared ?? "por fórmula"}</dd></div></dl><div className="viewed-slots">{focusedProfile.kind === "pact" && viewedMagic?.pactSlots ? <span>{viewedMagic.pactSlots} espaços de Pacto de {viewedMagic.pactLevel}º</span> : <small>Os espaços comuns reais aparecem no motor combinado acima.</small>}</div></article></div><label className="progression-note"><span>Anotação de {focusedClass?.name} {viewedLevel}</span><textarea value={character.progressionNotes[`${focusedEntry.id}:${viewedLevel}`] ?? ""} onChange={(event) => updateCharacter("progressionNotes", { ...character.progressionNotes, [`${focusedEntry.id}:${viewedLevel}`]: event.target.value })} placeholder="Talento, escolha de subclasse, regra do mestre ou lembrete desta trilha…" /></label></section>
 
         <section className="spellcasting-controls progression-magic-controls"><div><span className="eyebrow">Exceção da mesa</span><h3>{character.spellcastingMode === "auto" ? "Cálculo oficial combinado" : "Tabela personalizada ativa"}</h3><p>{character.spellcastingMode === "auto" ? "A ficha combina automaticamente os níveis de conjurador. Use uma exceção somente quando uma regra da mesa ou subclasse exigir outra tabela." : "A tabela manual substitui os espaços compartilhados do personagem; Magia de Pacto continua indicada separadamente."}</p></div><div className="spellcasting-control-fields"><label>{character.spellcastingMode === "auto" ? "Usar uma exceção" : "Tabela-base da exceção"}<select value={character.spellcastingMode === "auto" ? "" : character.spellcastingProfileId} onChange={(event) => event.target.value && chooseSpellcastingProfile(event.target.value)}><option value="">Seguir cálculo multiclasse</option>{spellcastingProfiles.filter((profile) => profile.id !== "none").map((profile) => <option key={profile.id} value={profile.id}>{profile.label} · {profile.edition}</option>)}</select></label>{character.spellcastingMode === "auto" ? <button className="ghost-button" onClick={() => { const base = sharedSpellcastingProfile; setCharacter((current) => ({ ...current, spellcastingMode: "manual", spellcastingProfileId: base.id, spellcastingRows: cloneSpellcastingRows(base.rows) })); }}><Pencil size={15} />Editar espaços por nível total</button> : <button className="ghost-button" onClick={() => setCharacter((current) => ({ ...current, spellcastingMode: "auto", spellcastingRows: [] }))}><Sparkles size={15} />Restaurar cálculo oficial</button>}</div></section>
 

@@ -623,6 +623,10 @@ h1, h2, .hero-panel h1 { font-family: var(--font-display); font-weight: 500; }
 .multiclass-total span, .entry-kind { color: var(--accent); font-size: .59rem; font-weight: 850; letter-spacing: .11em; }
 .multiclass-total strong { font: 2rem var(--font-display); }
 .multiclass-total small { color: var(--muted); font-size: .62rem; }
+.class-budget-rule { display: flex; align-items: flex-start; gap: 11px; margin-top: 16px; padding: 13px 15px; color: var(--ink); border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line)); border-radius: 13px; background: color-mix(in srgb, var(--accent-soft) 45%, var(--surface-2)); }
+.class-budget-rule > svg { flex: 0 0 auto; margin-top: 1px; color: var(--accent); }
+.class-budget-rule strong { display: block; margin-bottom: 3px; font-size: .75rem; }
+.class-budget-rule p { margin: 0; color: var(--muted); font-size: .67rem; line-height: 1.5; }
 .multiclass-entry-list { display: grid; gap: 10px; margin-top: 18px; }
 .multiclass-entry { position: relative; display: grid; grid-template-columns: minmax(220px, 1.15fr) minmax(110px, .45fr) minmax(230px, 1fr); gap: 14px; align-items: center; padding: 16px 48px 16px 16px; border: 1px solid var(--line); border-radius: 17px; background: var(--surface-2); }
 .multiclass-entry.invalid { border-color: color-mix(in srgb, #d96a6a 65%, var(--line)); }
@@ -632,6 +636,8 @@ h1, h2, .hero-panel h1 { font-family: var(--font-display); font-weight: 500; }
 .multiclass-entry-main small { color: var(--muted); font-size: .68rem; line-height: 1.4; }
 .multiclass-level-field, .multiclass-subclass-field, .multiclass-add-controls label { display: grid; gap: 6px; color: var(--muted); font-size: .63rem; font-weight: 750; }
 .multiclass-level-field input, .multiclass-subclass-field select, .multiclass-add-controls select { width: 100%; min-width: 0; min-height: 42px; padding: 9px 11px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 10px; }
+.multiclass-level-field input:disabled, .multiclass-add-controls select:disabled { cursor: not-allowed; opacity: .58; }
+.multiclass-level-field small { color: var(--muted); font-size: .59rem; font-weight: 500; line-height: 1.35; }
 .multiclass-subclass-field small { color: var(--muted); font-size: .59rem; line-height: 1.35; }
 .multiclass-requirement { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; padding: 9px 11px; border-radius: 10px; font-size: .66rem; }
 .multiclass-requirement.met { color: color-mix(in srgb, #58bc86 80%, var(--ink)); background: color-mix(in srgb, #58bc86 12%, transparent); }
