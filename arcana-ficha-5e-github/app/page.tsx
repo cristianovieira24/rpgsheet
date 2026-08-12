@@ -97,6 +97,17 @@ import {
   spellcastingProfiles,
   type SpellcastingRow,
 } from "./data/spellcasting";
+import {
+  classSpellAbilities,
+  combinedCasterLevel,
+  hasMixedClassEditions,
+  isSpellcastingEntry,
+  multiclassRequirementFailures,
+  normalizeClassLevelEntries,
+  requirementLabel,
+  totalClassLevels,
+  type ClassLevelEntry,
+} from "./data/multiclass";
 
 type Section = "inicio" | "criador" | "ficha" | "progressao" | "magias" | "inventario" | "historia" | "quadro" | "biblioteca" | "regras";
 type Theme = "medieval" | "highfantasy" | "darkfantasy" | "dyslexia";
@@ -188,6 +199,7 @@ type CharacterState = {
   languages: string[];
   classId: string;
   subclassId: string;
+  classLevels: ClassLevelEntry[];
   backgroundId: string;
   alignment: string;
   portrait: string;
@@ -268,6 +280,7 @@ const defaultCharacter: CharacterState = {
   languages: ["", ""],
   classId: "",
   subclassId: "",
+  classLevels: [],
   backgroundId: "",
   alignment: "Neutro",
   portrait: "",
@@ -542,9 +555,25 @@ const classicSupplementSpecies = officialSpeciesCatalog
 function normalizeCharacterData(raw: Partial<CharacterState>): CharacterState {
   const ruleset: Ruleset = raw.ruleset === "2014" ? "2014" : "2024";
   const speciesRuleset: Ruleset = raw.speciesRuleset === "2014" ? "2014" : raw.speciesRuleset === "2024" ? "2024" : ruleset;
-  const classRuleset: Ruleset = raw.classRuleset === "2014" ? "2014" : raw.classRuleset === "2024" ? "2024" : ruleset;
+  const fallbackClassRuleset: Ruleset = raw.classRuleset === "2014" ? "2014" : raw.classRuleset === "2024" ? "2024" : ruleset;
   const backgroundRuleset: Ruleset = raw.backgroundRuleset === "2014" ? "2014" : raw.backgroundRuleset === "2024" ? "2024" : ruleset;
-  const classId = classes.some((entry) => entry.id === raw.classId) ? raw.classId ?? "" : "";
+  const fallbackClassId = classes.some((entry) => entry.id === raw.classId) ? raw.classId ?? "" : "";
+  const classLevels = normalizeClassLevelEntries(raw.classLevels, {
+    classId: fallbackClassId,
+    subclassId: raw.subclassId ?? "",
+    ruleset: fallbackClassRuleset,
+    level: raw.level ?? 1,
+  }, new Set(classes.map((entry) => entry.id)));
+  const normalizedClassLevels = classLevels.map((entry) => {
+    const pool = entry.ruleset === "2024" ? currentSubclasses : [...legacyCoreSubclasses, ...classicSupplementSubclasses];
+    return {
+      ...entry,
+      subclassId: pool.some((subclass) => subclass.classId === entry.classId && subclass.id === entry.subclassId) ? entry.subclassId : "",
+    };
+  });
+  const primaryClass = normalizedClassLevels[0];
+  const classRuleset = primaryClass?.ruleset ?? fallbackClassRuleset;
+  const classId = primaryClass?.classId ?? fallbackClassId;
   const speciesPool = speciesRuleset === "2024" ? species : [...legacySpecies, ...classicSupplementSpecies];
   const backgroundPool = backgroundRuleset === "2024" ? backgrounds : legacyBackgrounds;
   const lineagePool = speciesRuleset === "2024" ? currentLineages : [...legacyLineages, ...classicSupplementLineages];
@@ -552,7 +581,7 @@ function normalizeCharacterData(raw: Partial<CharacterState>): CharacterState {
   const speciesId = speciesPool.some((entry) => entry.id === raw.speciesId) ? raw.speciesId ?? "" : "";
   const backgroundId = backgroundPool.some((entry) => entry.id === raw.backgroundId) ? raw.backgroundId ?? "" : "";
   const lineageId = lineagePool.some((entry) => entry.speciesId === speciesId && entry.id === raw.lineageId) ? raw.lineageId ?? "" : "";
-  const subclassId = subclassPool.some((entry) => entry.classId === classId && entry.id === raw.subclassId) ? raw.subclassId ?? "" : "";
+  const subclassId = primaryClass?.subclassId ?? (subclassPool.some((entry) => entry.classId === classId && entry.id === raw.subclassId) ? raw.subclassId ?? "" : "");
   return {
     ...defaultCharacter,
     ...raw,
@@ -562,6 +591,8 @@ function normalizeCharacterData(raw: Partial<CharacterState>): CharacterState {
     classRuleset,
     backgroundRuleset,
     classId,
+    level: normalizedClassLevels.length ? totalClassLevels(normalizedClassLevels) : Math.max(1, Math.min(20, raw.level ?? 1)),
+    classLevels: normalizedClassLevels,
     speciesId,
     backgroundId,
     lineageId,
@@ -617,11 +648,12 @@ function normalizeCharacterBundle(payload: unknown): CharacterBundle {
 
 function characterSummary(snapshot: CharacterState) {
   const speciesPool = snapshot.speciesRuleset === "2024" ? species : [...legacySpecies, ...classicSupplementSpecies];
-  const subclassPool = snapshot.classRuleset === "2024" ? currentSubclasses : [...legacyCoreSubclasses, ...classicSupplementSubclasses];
+  const classSummary = snapshot.classLevels.length
+    ? snapshot.classLevels.map((entry) => `${classes.find((candidate) => candidate.id === entry.classId)?.name ?? entry.classId} ${entry.level}`).join(" / ")
+    : classes.find((entry) => entry.id === snapshot.classId)?.name;
   return [
     speciesPool.find((entry) => entry.id === snapshot.speciesId)?.name,
-    classes.find((entry) => entry.id === snapshot.classId)?.name,
-    subclassPool.find((entry) => entry.id === snapshot.subclassId)?.name,
+    classSummary,
   ].filter(Boolean).join(" · ");
 }
 
@@ -730,6 +762,12 @@ export default function HomePage() {
   const [activeFeature, setActiveFeature] = useState<{ name: string; summary: string; source: string; level: number; unlocked: boolean; access: AccessKind } | null>(null);
   const [featureEditor, setFeatureEditor] = useState<FeatureNote | null>(null);
   const [selectedProgressionLevel, setSelectedProgressionLevel] = useState(1);
+  const [progressionClassEntryId, setProgressionClassEntryId] = useState("");
+  const [multiclassDraftClassId, setMulticlassDraftClassId] = useState("");
+  const [multiclassDraftRuleset, setMulticlassDraftRuleset] = useState<Ruleset>("2024");
+  const [mixedEditionWarningOpen, setMixedEditionWarningOpen] = useState(false);
+  const [hideMixedEditionWarning, setHideMixedEditionWarning] = useState(false);
+  const [pendingMulticlass, setPendingMulticlass] = useState<{ classId: string; ruleset: Ruleset; mode: "add" | "primary" } | null>(null);
   const [cloudRecords, setCloudRecords] = useState<CloudCharacterRecord[]>([]);
   const [cloudBusy, setCloudBusy] = useState(false);
   const [cloudError, setCloudError] = useState("");
@@ -779,13 +817,19 @@ export default function HomePage() {
   const activeLineages = revisedSpeciesRules ? currentLineages : [...legacyLineages, ...classicSupplementLineages];
   const activeSubclasses = revisedClassRules ? currentSubclasses : [...legacyCoreSubclasses, ...classicSupplementSubclasses];
   const allSpeciesOptions = revisedSpeciesRules ? revisedSpeciesOptions : legacySpeciesOptions;
-  const selectedClass = classes.find((entry) => entry.id === character.classId);
+  const classLevelEntries = character.classLevels.length
+    ? character.classLevels
+    : character.classId
+      ? [{ id: "class-primary", classId: character.classId, subclassId: character.subclassId, ruleset: character.classRuleset, level: character.level }]
+      : [];
+  const primaryClassEntry = classLevelEntries[0];
+  const selectedClass = classes.find((entry) => entry.id === (primaryClassEntry?.classId ?? character.classId));
   const selectedSpecies = allSpeciesOptions.find((entry) => entry.id === character.speciesId);
   const selectedBackground = activeBackgrounds.find((entry) => entry.id === character.backgroundId);
   const selectedLineage = activeLineages.find((entry) => entry.speciesId === character.speciesId && entry.id === character.lineageId);
-  const selectedSubclass = activeSubclasses.find((entry) => entry.classId === character.classId && entry.id === character.subclassId);
+  const selectedSubclass = activeSubclasses.find((entry) => entry.classId === (primaryClassEntry?.classId ?? character.classId) && entry.id === (primaryClassEntry?.subclassId ?? character.subclassId));
   const availableLineages = activeLineages.filter((entry) => entry.speciesId === character.speciesId);
-  const availableSubclasses = activeSubclasses.filter((entry) => entry.classId === character.classId);
+  const availableSubclasses = activeSubclasses.filter((entry) => entry.classId === (primaryClassEntry?.classId ?? character.classId));
   const lineageIsRequired = revisedSpeciesRules
     ? requiredLineageSpecies.has(character.speciesId)
     : availableLineages.length > 0;
@@ -829,27 +873,81 @@ export default function HomePage() {
   const backgroundPackage = selectedBackground
     ? openBackgroundEquipment[selectedBackground.id] ?? backgroundFallbackPackage(selectedBackground.name, selectedBackground.tool)
     : null;
+  const classDisplay = classLevelEntries.length
+    ? classLevelEntries.map((entry) => `${classes.find((candidate) => candidate.id === entry.classId)?.name ?? entry.classId} ${entry.level}`).join(" / ")
+    : "Classe não definida";
   const progression = revisedClassRules ? (classProgressions[character.classId] ?? []) : (legacyClassProgressions[character.classId] ?? []);
+  const classFeatureEntries = classLevelEntries.flatMap((entry) => {
+    const className = classes.find((candidate) => candidate.id === entry.classId)?.name ?? entry.classId;
+    const features = entry.ruleset === "2024" ? (classProgressions[entry.classId] ?? []) : (legacyClassProgressions[entry.classId] ?? []);
+    return features.filter((feature) => feature.level <= entry.level).map((feature) => ({ ...feature, classId: entry.classId, className, ruleset: entry.ruleset }));
+  });
   const automaticSpellProfileId = automaticSpellcastingProfileId(character.classId, character.subclassId, character.classRuleset);
   const selectedSpellcastingProfile = spellcastingProfiles.find((profile) => profile.id === (character.spellcastingMode === "auto" ? automaticSpellProfileId : character.spellcastingProfileId)) ?? spellcastingProfiles.at(-1)!;
   const effectiveSpellcastingRows = character.spellcastingMode === "manual" && character.spellcastingRows.length === 20
     ? character.spellcastingRows
     : selectedSpellcastingProfile.rows;
-  const currentSpellcastingRow = effectiveSpellcastingRows[Math.max(0, Math.min(19, character.level - 1))];
+  const sharedCasterLevel = combinedCasterLevel(classLevelEntries);
+  const sharedSpellcastingProfile = spellcastingProfiles.find((profile) => profile.id === "wizard-2024")!;
+  const sharedSpellcastingRow = sharedCasterLevel > 0 ? sharedSpellcastingProfile.rows[sharedCasterLevel - 1] : null;
+  const displayedSharedSpellcastingRow = character.spellcastingMode === "manual" && character.spellcastingRows.length === 20
+    ? character.spellcastingRows[Math.max(0, character.level - 1)]
+    : sharedSpellcastingRow;
+  const pactClassEntries = classLevelEntries.filter((entry) => entry.classId === "warlock");
+  const pactRows = pactClassEntries.map((entry) => ({
+    entry,
+    row: spellcastingProfiles.find((profile) => profile.id === `warlock-${entry.ruleset}`)?.rows[entry.level - 1],
+  }));
+  const spellcastingClassEntries = classLevelEntries.filter(isSpellcastingEntry);
   const calculatedPb = proficiency(character.level);
   const overrides = { ...defaultOverrides, ...character.overrides, skillBonuses: character.overrides?.skillBonuses ?? {}, saveBonuses: { ...defaultOverrides.saveBonuses, ...(character.overrides?.saveBonuses ?? {}) } };
   const pb = overrides.proficiencyBonus ?? calculatedPb;
   const conMod = modifier(finalAbilities.con);
   const dexMod = modifier(finalAbilities.dex);
   const hitDie = selectedClass?.die ?? 8;
+  const hitDiceLabel = classLevelEntries.length
+    ? classLevelEntries.map((entry) => `${entry.level}d${classes.find((candidate) => candidate.id === entry.classId)?.die ?? 8}`).join(" + ")
+    : `1d${hitDie}`;
   const dwarfToughnessBonus = character.speciesId === "dwarf" && (revisedSpeciesRules || character.lineageId === "hill-dwarf") ? character.level : 0;
-  const calculatedMaxHp = selectedClass ? Math.max(character.level, hitDie + conMod + (character.level - 1) * (Math.floor(hitDie / 2) + 1 + conMod) + dwarfToughnessBonus) : Math.max(1, 8 + conMod + dwarfToughnessBonus);
+  const multiclassBaseHp = classLevelEntries.reduce((total, entry, index) => {
+    const die = classes.find((candidate) => candidate.id === entry.classId)?.die ?? 8;
+    const levelsUsingAverage = Math.max(0, entry.level - (index === 0 ? 1 : 0));
+    return total + (index === 0 ? die + conMod : 0) + levelsUsingAverage * (Math.floor(die / 2) + 1 + conMod);
+  }, 0);
+  const calculatedMaxHp = selectedClass ? Math.max(character.level, multiclassBaseHp + dwarfToughnessBonus) : Math.max(1, 8 + conMod + dwarfToughnessBonus);
   const maxHp = overrides.maxHp ?? calculatedMaxHp;
   const thirdCasterAbility = ["eldritch-knight", "eldritch-knight-2014", "arcane-trickster", "arcane-trickster-2014"].includes(character.subclassId) ? "int" : null;
   const spellAbility = (character.spellcastingAbility || selectedClass?.spellAbility || thirdCasterAbility) as AbilityKey | null | undefined;
   const spellMod = spellAbility ? modifier(finalAbilities[spellAbility]) : 0;
   const spellDc = overrides.spellDc ?? 8 + pb + spellMod;
   const spellAttack = overrides.spellAttack ?? pb + spellMod;
+  const spellStatsByClass = spellcastingClassEntries.map((entry) => {
+    const thirdCaster = ["eldritch-knight", "eldritch-knight-2014", "arcane-trickster", "arcane-trickster-2014"].includes(entry.subclassId);
+    const ability = (classSpellAbilities[entry.classId] ?? (thirdCaster ? "int" : null)) as AbilityKey | null;
+    const abilityMod = ability ? modifier(finalAbilities[ability]) : 0;
+    return {
+      entry,
+      className: classes.find((candidate) => candidate.id === entry.classId)?.name ?? entry.classId,
+      ability,
+      dc: 8 + pb + abilityMod,
+      attack: pb + abilityMod,
+    };
+  });
+  const multiclassFailures = multiclassRequirementFailures(classLevelEntries, finalAbilities);
+  const mixedClassEditions = hasMixedClassEditions(classLevelEntries);
+  const multiclassCandidate = multiclassDraftClassId
+    ? { id: "candidate", classId: multiclassDraftClassId, subclassId: "", ruleset: multiclassDraftRuleset, level: 1 } as ClassLevelEntry
+    : null;
+  const multiclassCandidateFailures = multiclassCandidate
+    ? multiclassRequirementFailures([...classLevelEntries, multiclassCandidate], finalAbilities)
+    : [];
+  const canAddMulticlass = Boolean(
+    multiclassCandidate
+    && classLevelEntries.length > 0
+    && classLevelEntries.length < 12
+    && !classLevelEntries.some((entry) => entry.classId === multiclassCandidate.classId)
+    && multiclassCandidateFailures.length === 0
+  );
   const armorClass = overrides.armorClass ?? 10 + dexMod;
   const initiative = overrides.initiative ?? dexMod;
   const movementSpeed = overrides.speed ?? selectedSpecies?.speed ?? 9;
@@ -874,6 +972,7 @@ export default function HomePage() {
         const savedBoards = localStorage.getItem("arcana-boards-v2");
         const legacyBoard = localStorage.getItem("arcana-board-v1");
         const custom = localStorage.getItem("arcana-custom-spells-v1");
+        const hiddenMixedWarning = localStorage.getItem("arcana-hide-mixed-multiclass-warning-v1");
         if (raw) {
           const parsed = JSON.parse(raw);
           const normalized = normalizeCharacterData(parsed);
@@ -899,6 +998,7 @@ export default function HomePage() {
           setActiveBoardId(migrated.id);
         }
         if (custom) setCustomSpells(JSON.parse(custom));
+        if (hiddenMixedWarning === "true") setHideMixedEditionWarning(true);
       } catch {
         // A malformed local draft should never prevent the app from opening.
       }
@@ -972,7 +1072,58 @@ export default function HomePage() {
   }, [boardZoom, activeBoardId]);
 
   const updateCharacter = <K extends keyof CharacterState>(key: K, value: CharacterState[K]) => {
-    setCharacter((current) => ({ ...current, [key]: value }));
+    setCharacter((current) => {
+      if (key === "level" && current.classLevels.length) {
+        const requested = Math.max(1, Math.min(20, Number(value)));
+        const otherLevels = totalClassLevels(current.classLevels.slice(1));
+        const classLevels = current.classLevels.map((entry, index) => index === 0 ? { ...entry, level: Math.max(1, requested - otherLevels) } : entry);
+        return { ...current, level: totalClassLevels(classLevels), classLevels };
+      }
+      if (key === "classId" && current.classLevels.length) {
+        const classId = String(value);
+        const duplicateLevel = current.classLevels.slice(1).find((entry) => entry.classId === classId)?.level ?? 0;
+        const classLevels = current.classLevels.map((entry, index) => index === 0 ? { ...entry, classId, subclassId: "", level: entry.level + duplicateLevel } : entry).filter((entry, index) => index === 0 || entry.classId !== classId);
+        return { ...current, classId, subclassId: "", classLevels, level: totalClassLevels(classLevels) };
+      }
+      if (key === "subclassId" && current.classLevels.length) {
+        const subclassId = String(value);
+        const classLevels = current.classLevels.map((entry, index) => index === 0 ? { ...entry, subclassId } : entry);
+        return { ...current, subclassId, classLevels };
+      }
+      return { ...current, [key]: value };
+    });
+  };
+
+  const updateClassComposition = (updater: (entries: ClassLevelEntry[]) => ClassLevelEntry[]) => {
+    setCharacter((current) => {
+      const existing = current.classLevels.length
+        ? current.classLevels
+        : current.classId
+          ? [{ id: "class-primary", classId: current.classId, subclassId: current.subclassId, ruleset: current.classRuleset, level: current.level }]
+          : [];
+      const next = updater(existing).filter((entry, index, entries) => entries.findIndex((candidate) => candidate.classId === entry.classId) === index);
+      const primary = next[0];
+      return {
+        ...current,
+        classLevels: next,
+        level: next.length ? totalClassLevels(next) : current.level,
+        classId: primary?.classId ?? "",
+        subclassId: primary?.subclassId ?? "",
+        classRuleset: primary?.ruleset ?? current.classRuleset,
+      };
+    });
+  };
+
+  const setTotalCharacterLevel = (requestedLevel: number) => {
+    const target = Math.max(1, Math.min(20, requestedLevel));
+    if (!classLevelEntries.length) {
+      updateCharacter("level", target);
+      return;
+    }
+    updateClassComposition((entries) => {
+      const otherLevels = totalClassLevels(entries.slice(1));
+      return entries.map((entry, index) => index === 0 ? { ...entry, level: Math.max(1, target - otherLevels) } : entry);
+    });
   };
 
   const chooseSpecies = (speciesId: string, speciesRuleset: Ruleset = character.speciesRuleset) => {
@@ -986,20 +1137,86 @@ export default function HomePage() {
   };
 
   const chooseClass = (classId: string, classRuleset: Ruleset) => {
-    setCharacter((current) => ({
-      ...current,
-      classRuleset,
-      classId,
-      subclassId: "",
-      spellcastingMode: "auto",
-      spellcastingProfileId: "none",
-      spellcastingRows: [],
-      spellcastingAbility: "",
-      classEquipmentChoice: "",
-      inventory: current.inventory.filter((item) => item.origin !== "class-start"),
-      coins: { ...current.coins, gp: Math.max(0, current.coins.gp - current.classStartingGp) },
-      classStartingGp: 0,
-    }));
+    setCharacter((current) => {
+      const existing = current.classLevels.length
+        ? current.classLevels
+        : current.classId
+          ? [{ id: "class-primary", classId: current.classId, subclassId: current.subclassId, ruleset: current.classRuleset, level: current.level }]
+          : [];
+      const oldPrimary = existing[0];
+      const duplicate = existing.slice(1).find((entry) => entry.classId === classId);
+      const primaryLevel = Math.min(20, (oldPrimary?.level ?? current.level) + (duplicate?.level ?? 0));
+      const next: ClassLevelEntry[] = [
+        { id: oldPrimary?.id ?? "class-primary", classId, subclassId: oldPrimary?.classId === classId && oldPrimary.ruleset === classRuleset ? oldPrimary.subclassId : "", ruleset: classRuleset, level: primaryLevel },
+        ...existing.slice(1).filter((entry) => entry.classId !== classId),
+      ];
+      return {
+        ...current,
+        classRuleset,
+        classId,
+        subclassId: next[0].subclassId,
+        classLevels: next,
+        level: totalClassLevels(next),
+        spellcastingMode: "auto",
+        spellcastingProfileId: "none",
+        spellcastingRows: [],
+        spellcastingAbility: "",
+        classEquipmentChoice: "",
+        inventory: current.inventory.filter((item) => item.origin !== "class-start"),
+        coins: { ...current.coins, gp: Math.max(0, current.coins.gp - current.classStartingGp) },
+        classStartingGp: 0,
+      };
+    });
+  };
+
+  const requestPrimaryClass = (classId: string, ruleset: Ruleset) => {
+    const wouldMixEditions = classLevelEntries.slice(1).some((entry) => entry.ruleset !== ruleset);
+    if (wouldMixEditions && !hideMixedEditionWarning) {
+      setPendingMulticlass({ classId, ruleset, mode: "primary" });
+      setMixedEditionWarningOpen(true);
+      return;
+    }
+    chooseClass(classId, ruleset);
+  };
+
+  const updateClassEntry = (entryId: string, patch: Partial<ClassLevelEntry>) => {
+    updateClassComposition((entries) => entries.map((entry) => entry.id === entryId ? { ...entry, ...patch } : entry));
+  };
+
+  const updateClassEntryLevel = (entryId: string, requestedLevel: number) => {
+    updateClassComposition((entries) => {
+      const otherLevels = entries.filter((entry) => entry.id !== entryId).reduce((sum, entry) => sum + entry.level, 0);
+      const level = Math.max(1, Math.min(20 - otherLevels, requestedLevel));
+      return entries.map((entry) => entry.id === entryId ? { ...entry, level } : entry);
+    });
+  };
+
+  const removeClassEntry = (entryId: string) => {
+    updateClassComposition((entries) => entries.filter((entry, index) => index === 0 || entry.id !== entryId));
+  };
+
+  const addMulticlassNow = (classId: string, ruleset: Ruleset) => {
+    updateClassComposition((entries) => {
+      if (!entries.length || entries.some((entry) => entry.classId === classId) || entries.length >= 12) return entries;
+      const donorIndex = entries.findIndex((entry) => entry.level > 1);
+      const next = entries.map((entry, index) => index === donorIndex ? { ...entry, level: entry.level - 1 } : entry);
+      if (donorIndex < 0 && totalClassLevels(entries) >= 20) return entries;
+      return [...next, { id: crypto.randomUUID(), classId, subclassId: "", ruleset, level: 1 }];
+    });
+    setMulticlassDraftClassId("");
+  };
+
+  const requestMulticlass = () => {
+    if (!multiclassDraftClassId || classLevelEntries.some((entry) => entry.classId === multiclassDraftClassId)) return;
+    const proposed = [...classLevelEntries, { id: "candidate", classId: multiclassDraftClassId, subclassId: "", ruleset: multiclassDraftRuleset, level: 1 }];
+    if (multiclassRequirementFailures(proposed, finalAbilities).length) return;
+    const wouldMixEditions = classLevelEntries.some((entry) => entry.ruleset !== multiclassDraftRuleset);
+    if (wouldMixEditions && !hideMixedEditionWarning) {
+      setPendingMulticlass({ classId: multiclassDraftClassId, ruleset: multiclassDraftRuleset, mode: "add" });
+      setMixedEditionWarningOpen(true);
+      return;
+    }
+    addMulticlassNow(multiclassDraftClassId, multiclassDraftRuleset);
   };
 
   const chooseBackground = (entry: (typeof backgrounds)[number] | LegacyBackgroundDefinition, backgroundRuleset: Ruleset = ("feature" in entry ? "2014" : "2024")) => {
@@ -1066,7 +1283,13 @@ export default function HomePage() {
   };
 
   const navigate = (next: Section) => {
-    if (next === "progressao") setSelectedProgressionLevel(character.level);
+    if (next === "progressao") {
+      const entry = classLevelEntries.find((candidate) => candidate.id === progressionClassEntryId) ?? primaryClassEntry;
+      if (entry) {
+        setProgressionClassEntryId(entry.id);
+        setSelectedProgressionLevel(entry.level);
+      }
+    }
     setSection(next);
     setSidebarOpen(false);
     setDiceOpen(false);
@@ -1089,7 +1312,7 @@ export default function HomePage() {
           player: snapshot.player,
           level: snapshot.level,
           summary: characterSummary(snapshot),
-          data: JSON.stringify({ version: 4, character: snapshot, customSpells, boards, activeBoardId }),
+          data: JSON.stringify({ version: 5, character: snapshot, customSpells, boards, activeBoardId }),
           createdAt: previous?.createdAt ?? now,
           updatedAt: now,
         };
@@ -1107,7 +1330,7 @@ export default function HomePage() {
           player: snapshot.player,
           level: snapshot.level,
           summary: characterSummary(snapshot),
-          data: { version: 4, character: snapshot, customSpells, boards, activeBoardId },
+          data: { version: 5, character: snapshot, customSpells, boards, activeBoardId },
         }),
       });
       if (!response.ok) throw new Error("Falha ao salvar.");
@@ -1346,7 +1569,7 @@ export default function HomePage() {
   };
 
   const exportCharacter = () => {
-    const payload = { version: 4, character, customSpells, boards, activeBoardId };
+    const payload = { version: 5, character, customSpells, boards, activeBoardId };
     const href = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }));
     const link = document.createElement("a");
     link.href = href;
@@ -1397,7 +1620,7 @@ export default function HomePage() {
           player: snapshot.player,
           level: snapshot.level,
           summary: characterSummary(snapshot),
-          data: JSON.stringify({ version: 4, character: snapshot, customSpells: importPreview.customSpells, boards: importPreview.boards, activeBoardId: importPreview.activeBoardId }),
+          data: JSON.stringify({ version: 5, character: snapshot, customSpells: importPreview.customSpells, boards: importPreview.boards, activeBoardId: importPreview.activeBoardId }),
           createdAt: now,
           updatedAt: now,
         };
@@ -1422,7 +1645,7 @@ export default function HomePage() {
           player: snapshot.player,
           level: snapshot.level,
           summary: characterSummary(snapshot),
-          data: { version: 4, character: snapshot, customSpells: importPreview.customSpells, boards: importPreview.boards, activeBoardId: importPreview.activeBoardId },
+          data: { version: 5, character: snapshot, customSpells: importPreview.customSpells, boards: importPreview.boards, activeBoardId: importPreview.activeBoardId },
         }),
       });
       if (!response.ok) throw new Error("Falha ao salvar.");
@@ -1493,7 +1716,7 @@ export default function HomePage() {
         <div className="hero-copy">
           <span className="eyebrow"><Sparkles size={14} /> Seu grimório de personagem</span>
           <h1>{character.name ? <>Continue a história de <em>{character.name}</em>.</> : <>Uma ficha que ensina enquanto você <em>cria.</em></>}</h1>
-          <p>{character.name ? `${selectedSpecies?.name ?? "Origem indefinida"} · ${selectedClass?.name ?? "Classe indefinida"} · nível ${character.level}` : "Escolha uma origem, entenda cada decisão e chegue à mesa sem precisar decorar o livro inteiro."}</p>
+          <p>{character.name ? `${selectedSpecies?.name ?? "Origem indefinida"} · ${classDisplay} · nível ${character.level}` : "Escolha uma origem, entenda cada decisão e chegue à mesa sem precisar decorar o livro inteiro."}</p>
           <div className="hero-actions">
             <button className="primary-button" onClick={() => navigate("criador")}>{completion === 4 ? "Revisar personagem" : "Começar criação"}<ChevronRight size={18} /></button>
             <button className="ghost-button" onClick={() => navigate("ficha")}><Eye size={17} />Abrir ficha</button>
@@ -1529,7 +1752,7 @@ export default function HomePage() {
           <div className="panel-title"><span><Shield size={18} />Visão rápida</span><button onClick={() => navigate("ficha")}>Ver ficha</button></div>
           <div className="quick-stat-row">
             <div><span>CA</span><strong>{armorClass}</strong><small>{overrides.armorClass === null ? "calculada" : "ajustada"}</small></div>
-            <div><span>PV</span><strong>{maxHp}</strong><small>d{hitDie} de vida</small></div>
+            <div><span>PV</span><strong>{maxHp}</strong><small>{hitDiceLabel}</small></div>
             <div><span>Prof.</span><strong>{signed(pb)}</strong><small>nível {character.level}</small></div>
             <div><span>Iniciativa</span><strong>{signed(initiative)}</strong><small>{overrides.initiative === null ? "Destreza" : "ajustada"}</small></div>
           </div>
@@ -1585,7 +1808,9 @@ export default function HomePage() {
     if (builderStep === 3 && humanFeatConflict) return { ok: false, reason: "O talento extra do Humano deve ser diferente do talento do antecedente." };
     if (builderStep === 3 && speciesSkillConflict) return { ok: false, reason: "A perícia da espécie deve ser diferente das perícias do antecedente." };
     if (builderStep === 4 && !abilitySelectionValid) return { ok: false, reason: pointBuyCost > 27 ? "A compra de pontos passou de 27." : "Distribua os bônus da origem entre atributos diferentes." };
+    if (builderStep === 4 && multiclassFailures.length) return { ok: false, reason: `A multiclasse ainda não atende: ${multiclassFailures.map((failure) => `${classes.find((entry) => entry.id === failure.classId)?.name} exige ${failure.requirement}`).join("; ")}.` };
     if (builderStep === 5 && (!character.classEquipmentChoice || !character.backgroundEquipmentChoice)) return { ok: false, reason: "Faça a escolha de equipamento da classe e do antecedente." };
+    if (builderStep === 7 && multiclassFailures.length) return { ok: false, reason: "Revise os atributos exigidos pela composição multiclasse." };
     return { ok: true, reason: "" };
   })();
 
@@ -1601,7 +1826,7 @@ export default function HomePage() {
             <label className="field-label">Pronomes<input value={character.pronouns} onChange={(e) => updateCharacter("pronouns", e.target.value)} placeholder="Ex.: ele/dele" /></label>
           </div>
           <div className="field-pair">
-            <label className="field-label">Nível inicial<input type="number" min={1} max={20} value={character.level} onChange={(e) => updateCharacter("level", Math.min(20, Math.max(1, Number(e.target.value))))} /></label>
+            <label className="field-label">Nível total inicial<input type="number" min={Math.max(1, classLevelEntries.length)} max={20} value={character.level} onChange={(e) => setTotalCharacterLevel(Number(e.target.value))} /><small>{classLevelEntries.length > 1 ? "Distribuído entre as classes na etapa Classe." : "Nível total do personagem."}</small></label>
             <label className="field-label">Tendência<select value={character.alignment} onChange={(e) => updateCharacter("alignment", e.target.value)}><option>Leal e Bom</option><option>Neutro e Bom</option><option>Caótico e Bom</option><option>Leal e Neutro</option><option>Neutro</option><option>Caótico e Neutro</option><option>Leal e Mau</option><option>Neutro e Mau</option><option>Caótico e Mau</option></select></label>
           </div>
           <details className="appearance-builder"><summary>Características físicas <ChevronRight size={16} /></summary><div className="appearance-grid">{([{ key: "age", label: "Idade" }, { key: "height", label: "Altura" }, { key: "weight", label: "Peso" }, { key: "eyes", label: "Olhos" }, { key: "hair", label: "Cabelo" }, { key: "skin", label: "Pele" }, { key: "build", label: "Porte" }, { key: "marks", label: "Marcas e cicatrizes" }] as const).map((field) => <label className="field-label" key={field.key}>{field.label}<input value={character.appearance[field.key]} onChange={(e) => updateCharacter("appearance", { ...character.appearance, [field.key]: e.target.value })} placeholder="Opcional" /></label>)}</div></details>
@@ -1640,10 +1865,28 @@ export default function HomePage() {
     );
     if (builderStep === 2) return (
       <div className="builder-content">
-        <span className="eyebrow">O modo de agir</span><h2>Escolha uma classe</h2><p className="lead">Pense menos em “profissão” e mais em como você deseja resolver problemas durante o jogo.</p>
-        <div className={`edition-rule-banner compact ${revisedClassRules ? "" : "legacy"}`}><BookMarked size={20} /><div><strong>Escolha a classe e a edição no próprio cartão.</strong><p>Em 2024 todas as subclasses entram no nível 3. Em 2014 o nível varia por classe, e cada suplemento permanece identificado pela abreviação do livro.</p></div></div>
-        {(["2024", "2014"] as Ruleset[]).map((edition) => <section className={`catalog-edition-section ${edition === "2014" ? "legacy-catalog" : ""}`} key={edition}><div className="edition-catalog-head"><div><span>{edition === "2024" ? "Classes revisadas 2024" : "Classes clássicas 2014"}</span><p>{edition === "2024" ? "Livro do Jogador 2024 · progressão revisada" : "Livro do Jogador 2014 · compatível com subclasses clássicas"}</p></div><small>12 classes</small></div><div className="choice-grid class-grid">{classes.map((entry) => { const selected = character.classId === entry.id && character.classRuleset === edition; return <button key={`${edition}-${entry.id}`} className={`choice-card class-card ${selected ? "selected" : ""}`} onClick={() => chooseClass(entry.id, edition)}><span className="die-badge">d{entry.die}</span><div><strong>{entry.name}</strong><small>Atributo: {entry.primary}</small></div><span className="catalog-badge">PHB {edition}</span><p>{entry.summary}</p><div className="tag-row">{entry.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></button>; })}</div></section>)}
-        {selectedClass && (() => { const unlockLevel = revisedClassRules ? 3 : (legacySubclassLevel[selectedClass.id] ?? 3); return <section className="lineage-panel subclass-picker"><div className="section-heading compact"><div><span className="eyebrow">Subclasse · {revisedClassRules ? "REVISADO 2024" : "CLÁSSICO 2014"}</span><h3>{character.level < unlockLevel ? "Planeje sua subclasse" : "Escolha uma subclasse"}</h3><p>{character.level < unlockLevel ? `No nível atual ela é uma prévia: os benefícios começam no nível ${unlockLevel}.` : "Seu personagem já alcançou o nível em que a subclasse entra em jogo."}</p></div><span className={`requirement-pill ${character.level >= unlockLevel ? "required" : "optional"}`}>{character.level >= unlockLevel ? "DISPONÍVEL" : `NÍVEL ${unlockLevel}`}</span></div><div className="subclass-grid">{availableSubclasses.map((entry) => { const isSupplement = !["SRD 5.2.1", "Livro do Jogador 2024", "Livro do Jogador 2014"].includes(entry.source); return <button key={`${entry.source}-${entry.id}`} title={entry.source} className={`subclass-card ${character.subclassId === entry.id ? "selected" : ""}`} onClick={() => updateCharacter("subclassId", entry.id)}><div className="subclass-card-head"><span>{character.subclassId === entry.id ? <Check size={16} /> : <Shield size={16} />}</span><span className={`catalog-badge ${isSupplement ? "dlc" : ""}`} aria-label={`Conteúdo de ${entry.source}`}>{sourceShort(entry.source)}</span></div><strong>{entry.name}</strong><p>{entry.summary}</p><small className="card-source">{revisedClassRules ? "Revisado 2024" : isSupplement ? `${sourceShort(entry.source)} · 2014` : "Clássico 2014"}</small></button>; })}</div></section>; })()}
+        <span className="eyebrow">O modo de agir</span><h2>Monte sua progressão de classes</h2><p className="lead">Escolha primeiro a classe inicial. Depois, se quiser, distribua os níveis entre outras classes sem perder de vista requisitos, edição e magia.</p>
+        <div className={`edition-rule-banner compact ${revisedClassRules ? "" : "legacy"}`}><BookMarked size={20} /><div><strong>A primeira classe continua sendo especial.</strong><p>Ela define Dados de Vida do 1º nível, salvaguardas e equipamento inicial. Classes adicionadas depois usam as proficiências limitadas da regra de multiclasse.</p></div></div>
+        {(["2024", "2014"] as Ruleset[]).map((edition) => <section className={`catalog-edition-section ${edition === "2014" ? "legacy-catalog" : ""}`} key={edition}><div className="edition-catalog-head"><div><span>{edition === "2024" ? "Classes revisadas 2024" : "Classes clássicas 2014"}</span><p>{edition === "2024" ? "Livro do Jogador 2024 · progressão revisada" : "Livro do Jogador 2014 · compatível com subclasses clássicas"}</p></div><small>12 classes</small></div><div className="choice-grid class-grid">{classes.map((entry) => { const selected = character.classId === entry.id && character.classRuleset === edition; return <button key={`${edition}-${entry.id}`} className={`choice-card class-card ${selected ? "selected" : ""}`} onClick={() => requestPrimaryClass(entry.id, edition)}><span className="die-badge">d{entry.die}</span><div><strong>{entry.name}</strong><small>Atributo: {entry.primary}</small></div><span className="catalog-badge">PHB {edition}</span><p>{entry.summary}</p><div className="tag-row">{entry.tags.map((tag) => <span key={tag}>{tag}</span>)}</div></button>; })}</div></section>)}
+        {classLevelEntries.length > 0 && <section className="multiclass-builder-panel">
+          <div className="section-heading compact"><div><span className="eyebrow">Composição atual</span><h3>{classDisplay}</h3><p>O nível total é a soma das trilhas. Habilidades e subclasses usam o nível da própria classe, nunca o nível total.</p></div><div className="multiclass-total"><span>NÍVEL TOTAL</span><strong>{character.level}</strong><small>máximo 20</small></div></div>
+          <div className="multiclass-entry-list">{classLevelEntries.map((entry, index) => {
+            const classDefinition = classes.find((candidate) => candidate.id === entry.classId);
+            const subclassPool = entry.ruleset === "2024" ? currentSubclasses : [...legacyCoreSubclasses, ...classicSupplementSubclasses];
+            const subclassOptions = subclassPool.filter((candidate) => candidate.classId === entry.classId);
+            const unlockLevel = entry.ruleset === "2024" ? 3 : (legacySubclassLevel[entry.classId] ?? 3);
+            const failure = multiclassFailures.find((candidate) => candidate.classId === entry.classId);
+            return <article className={`multiclass-entry ${failure ? "invalid" : ""}`} key={entry.id}>
+              <div className="multiclass-entry-main"><span className="die-badge">d{classDefinition?.die ?? 8}</span><div><span className="entry-kind">{index === 0 ? "CLASSE INICIAL" : `MULTICLASSE ${index}`}</span><strong>{classDefinition?.name}</strong><small>PHB {entry.ruleset} · requisito {requirementLabel(entry.classId)}</small></div></div>
+              <label className="multiclass-level-field"><span>Níveis nesta classe</span><input type="number" min={1} max={20 - totalClassLevels(classLevelEntries.filter((candidate) => candidate.id !== entry.id))} value={entry.level} onChange={(event) => updateClassEntryLevel(entry.id, Number(event.target.value))} /></label>
+              <label className="multiclass-subclass-field"><span>Subclasse</span><select value={entry.subclassId} onChange={(event) => updateClassEntry(entry.id, { subclassId: event.target.value })}><option value="">{entry.level < unlockLevel ? `Planejar para o nível ${unlockLevel}` : "Ainda não escolhida"}</option>{subclassOptions.map((subclass) => <option value={subclass.id} key={`${subclass.source}-${subclass.id}`}>{subclass.name} · {sourceShort(subclass.source)}</option>)}</select><small>{entry.level < unlockLevel ? `Benefícios começam no nível ${unlockLevel} de ${classDefinition?.name}.` : "Disponível no nível atual da classe."}</small></label>
+              <div className={`multiclass-requirement ${failure ? "failed" : "met"}`}>{failure ? <CircleHelp size={16} /> : <Check size={16} />}<span>{failure ? `Ajuste os atributos: ${failure.requirement}` : classLevelEntries.length > 1 ? `Requisito atendido: ${requirementLabel(entry.classId)}` : `Se adicionar multiclasse, esta classe exigirá ${requirementLabel(entry.classId)}.`}</span></div>
+              {index > 0 && <button className="bare-button multiclass-remove" aria-label={`Remover ${classDefinition?.name}`} title="Remover esta classe" onClick={() => removeClassEntry(entry.id)}><Trash2 size={16} /></button>}
+            </article>;
+          })}</div>
+          {mixedClassEditions && <div className="mixed-edition-inline"><CircleHelp size={18} /><div><strong>Esta ficha combina regras de 2024 e 2014.</strong><p>O cálculo é permitido, mas essa combinação não foi balanceada como uma progressão única. Confirme as interações com o mestre.</p></div></div>}
+          <div className="multiclass-add-panel"><div><span className="eyebrow">Adicionar outra classe</span><h4>Expanda a progressão</h4><p>Para entrar ou sair de uma classe, todos os requisitos da composição precisam estar em 13 ou mais. A mesma classe não pode ser escolhida duas vezes.</p></div><div className="multiclass-add-controls"><label>Classe<select value={multiclassDraftClassId} onChange={(event) => setMulticlassDraftClassId(event.target.value)}><option value="">Escolha uma classe</option>{classes.filter((entry) => !classLevelEntries.some((current) => current.classId === entry.id)).map((entry) => <option value={entry.id} key={entry.id}>{entry.name} · {requirementLabel(entry.id)}</option>)}</select></label><label>Edição<select value={multiclassDraftRuleset} onChange={(event) => setMulticlassDraftRuleset(event.target.value as Ruleset)}><option value="2024">Revisado 2024</option><option value="2014">Clássico 2014</option></select></label><button className="primary-button" disabled={!canAddMulticlass} title={multiclassCandidateFailures.length ? "A composição ainda não atende aos requisitos de atributo." : "Adicionar multiclasse"} onClick={requestMulticlass}><Plus size={16} />Adicionar classe</button></div>{multiclassDraftClassId && <div className={`candidate-check ${canAddMulticlass ? "valid" : "invalid"}`}><strong>{canAddMulticlass ? "Pode adicionar" : "Ainda não pode adicionar"}</strong><span>{multiclassCandidateFailures.length ? multiclassCandidateFailures.map((failure) => `${classes.find((entry) => entry.id === failure.classId)?.name}: ${failure.requirement}`).join(" · ") : `Requisito ${requirementLabel(multiclassDraftClassId)} atendido.`}</span></div>}</div>
+        </section>}
       </div>
     );
     if (builderStep === 3) return (
@@ -1692,14 +1935,14 @@ export default function HomePage() {
       <div className="builder-content review-layout">
         <div className="review-character">
           <div className="review-portrait" style={character.portrait ? { backgroundImage: `url(${character.portrait})` } : undefined}>{!character.portrait && <UserRound size={42} />}</div>
-          <span className="eyebrow">Pronto para respirar</span><h2>{character.name || "Personagem sem nome"}</h2><p>{selectedSpecies?.name ?? "Espécie indefinida"} · {selectedClass?.name ?? "Classe indefinida"} · nível {character.level}</p>
-          <div className="review-tags"><span>{selectedLineage?.name ?? selectedSpecies?.name ?? "Sem espécie"}</span><span>{selectedSubclass?.name ?? selectedClass?.name ?? "Sem classe"}</span><span>{selectedBackground?.name ?? "Sem antecedente"}</span><span>Proficiência {signed(pb)}</span></div>
+          <span className="eyebrow">Pronto para respirar</span><h2>{character.name || "Personagem sem nome"}</h2><p>{selectedSpecies?.name ?? "Espécie indefinida"} · {classDisplay} · nível {character.level}</p>
+          <div className="review-tags"><span>{selectedLineage?.name ?? selectedSpecies?.name ?? "Sem espécie"}</span><span>{classDisplay}</span><span>{selectedBackground?.name ?? "Sem antecedente"}</span><span>Proficiência {signed(pb)}</span></div>
           <button className="primary-button wide" onClick={() => navigate("ficha")}>Abrir ficha completa<ChevronRight size={18} /></button>
         </div>
         <div className="review-sheet">
           <div className="quick-stat-row large"><div><span>CA</span><strong>{10 + dexMod}</strong></div><div><span>PV</span><strong>{maxHp}</strong></div><div><span>CD magia</span><strong>{spellAbility ? spellDc : "—"}</strong></div></div>
           <h3>Resumo das escolhas</h3>
-          {[{ label: revisedSpeciesRules ? "Espécie" : "Raça", value: selectedSpecies?.name, note: [selectedLineage?.name, `regras ${character.speciesRuleset}`, character.speciesChoices.size, character.speciesChoices.skill && `Perícia: ${character.speciesChoices.skill}`, character.speciesChoices.originFeat && `Talento: ${character.speciesChoices.originFeat}`].filter(Boolean).join(" · ") || selectedSpecies?.traits.join(" · ") }, { label: "Idiomas", value: "Comum", note: character.languages.filter(Boolean).join(" · ") || (revisedSpeciesRules ? "Dois idiomas adicionais ainda não escolhidos" : "Conforme raça e antecedente") }, { label: "Classe", value: selectedClass?.name, note: `regras ${character.classRuleset} · d${hitDie} de vida · ${selectedClass?.summary ?? ""}` }, { label: "Antecedente", value: selectedBackground?.name, note: selectedBackground ? `regras ${character.backgroundRuleset} · ${revisedBackgroundRules ? selectedBackground.feat : (selectedBackground as LegacyBackgroundDefinition).feature} · ${selectedBackground.skills.join(" e ")}` : "" }].map((row) => <div className="review-row" key={row.label}><span>{row.label}</span><div><strong>{row.value ?? "Não definido"}</strong><small>{row.note}</small></div></div>)}
+          {[{ label: revisedSpeciesRules ? "Espécie" : "Raça", value: selectedSpecies?.name, note: [selectedLineage?.name, `regras ${character.speciesRuleset}`, character.speciesChoices.size, character.speciesChoices.skill && `Perícia: ${character.speciesChoices.skill}`, character.speciesChoices.originFeat && `Talento: ${character.speciesChoices.originFeat}`].filter(Boolean).join(" · ") || selectedSpecies?.traits.join(" · ") }, { label: "Idiomas", value: "Comum", note: character.languages.filter(Boolean).join(" · ") || (revisedSpeciesRules ? "Dois idiomas adicionais ainda não escolhidos" : "Conforme raça e antecedente") }, { label: classLevelEntries.length > 1 ? "Classes" : "Classe", value: classDisplay, note: `${hitDiceLabel} de vida · nível total ${character.level}${mixedClassEditions ? " · mistura 2024/2014 aprovada pela mesa" : ""}` }, { label: "Antecedente", value: selectedBackground?.name, note: selectedBackground ? `regras ${character.backgroundRuleset} · ${revisedBackgroundRules ? selectedBackground.feat : (selectedBackground as LegacyBackgroundDefinition).feature} · ${selectedBackground.skills.join(" e ")}` : "" }].map((row) => <div className="review-row" key={row.label}><span>{row.label}</span><div><strong>{row.value ?? "Não definido"}</strong><small>{row.note}</small></div></div>)}
         </div>
       </div>
     );
@@ -1711,7 +1954,7 @@ export default function HomePage() {
       <div className="builder-shell">
         <nav className="builder-steps" aria-label="Etapas da criação">{builderSteps.map((step, index) => { const reachable = index <= builderStep || (index === builderStep + 1 && builderGate.ok); return <button key={step} disabled={!reachable} className={`${builderStep === index ? "active" : ""} ${builderStep > index ? "done" : ""}`} onClick={() => reachable && setBuilderStep(index)}><span>{builderStep > index ? <Check size={14} /> : index + 1}</span><small>{step}</small></button>; })}</nav>
         <div className="builder-stage" key={builderStep}>{renderBuilderStep()}</div>
-        <div className="builder-footer"><button className="ghost-button" disabled={builderStep === 0} onClick={() => setBuilderStep((step) => Math.max(0, step - 1))}><ChevronLeft size={17} />Voltar</button><span className={builderGate.ok ? "" : "gate-warning"}>{builderGate.ok ? `Etapa ${builderStep + 1} de ${builderSteps.length}` : builderGate.reason}</span>{builderStep < builderSteps.length - 1 ? <button className="primary-button" disabled={!builderGate.ok} title={builderGate.reason || "Continuar"} onClick={() => setBuilderStep((step) => Math.min(builderSteps.length - 1, step + 1))}>Continuar<ChevronRight size={17} /></button> : <button className="primary-button" onClick={() => navigate("ficha")}>Concluir<Check size={17} /></button>}</div>
+        <div className="builder-footer"><button className="ghost-button" disabled={builderStep === 0} onClick={() => setBuilderStep((step) => Math.max(0, step - 1))}><ChevronLeft size={17} />Voltar</button><span className={builderGate.ok ? "" : "gate-warning"}>{builderGate.ok ? `Etapa ${builderStep + 1} de ${builderSteps.length}` : builderGate.reason}</span>{builderStep < builderSteps.length - 1 ? <button className="primary-button" disabled={!builderGate.ok} title={builderGate.reason || "Continuar"} onClick={() => setBuilderStep((step) => Math.min(builderSteps.length - 1, step + 1))}>Continuar<ChevronRight size={17} /></button> : <button className="primary-button" disabled={!builderGate.ok} title={builderGate.reason || "Concluir"} onClick={() => navigate("ficha")}>Concluir<Check size={17} /></button>}</div>
       </div>
     </div>
   );
@@ -1722,10 +1965,11 @@ export default function HomePage() {
       <div className="view-enter sheet-view">
         <div className="character-banner">
           <div className="sheet-portrait" style={character.portrait ? { backgroundImage: `url(${character.portrait})` } : undefined}>{!character.portrait && <UserRound size={38} />}</div>
-          <div className="character-banner-copy"><span className="eyebrow">Ficha viva · espécie {character.speciesRuleset} · classe {character.classRuleset} · antecedente {character.backgroundRuleset}</span><h1>{character.name || "Sem nome"}</h1><p>{selectedSpecies?.name}{selectedLineage ? ` · ${selectedLineage.name}` : ""} · {selectedClass?.name}{selectedSubclass ? ` · ${selectedSubclass.name}` : ""}</p></div>
-          <label className="level-control"><span>Nível</span><input type="number" min={1} max={20} value={character.level} onChange={(e) => updateCharacter("level", Math.min(20, Math.max(1, Number(e.target.value))))} /><small>de 20</small></label>
+          <div className="character-banner-copy"><span className="eyebrow">Ficha viva · espécie {character.speciesRuleset} · {classLevelEntries.length > 1 ? `${classLevelEntries.length} classes` : `classe ${character.classRuleset}`} · antecedente {character.backgroundRuleset}</span><h1>{character.name || "Sem nome"}</h1><p>{selectedSpecies?.name}{selectedLineage ? ` · ${selectedLineage.name}` : ""} · {classDisplay}</p></div>
+          <label className="level-control"><span>Nível total</span><input type="number" min={Math.max(1, classLevelEntries.length)} max={20} value={character.level} onChange={(e) => setTotalCharacterLevel(Number(e.target.value))} /><small>de 20</small></label>
           <div className="proficiency-control"><span>Proficiência</span><strong>{signed(pb)}</strong><small>{character.level < 20 ? `próximo aumento no nível ${Math.min(20, Math.floor((character.level - 1) / 4) * 4 + 5)}` : "valor máximo"}</small></div>
           <button className={`inspiration-button ${character.inspiration ? "active" : ""}`} onClick={() => updateCharacter("inspiration", !character.inspiration)}><Sparkles size={18} />Inspiração</button>
+          <button className="multiclass-sheet-button" title="Gerenciar classes e níveis" onClick={() => { setBuilderStep(2); navigate("criador"); }}><Network size={16} /><span>{classLevelEntries.length > 1 ? "Gerenciar classes" : "Adicionar multiclasse"}</span></button>
           <button className="sheet-edit-button" aria-label="Editar ficha" title="Editar escolhas da ficha" onClick={() => { if (revisedSpeciesRules && revisedClassRules && revisedBackgroundRules) setSheetEditOpen(true); else { setBuilderStep(1); navigate("criador"); } }}><Pencil size={17} /></button>
         </div>
         <section className="effects-bar"><div><span className="eyebrow"><Tag size={13} /> Estado atual</span>{character.effects.length === 0 && <small>Nenhuma condição, bônus ou penalidade ativa.</small>}</div><div className="effect-chips">{character.effects.map((effect) => <button key={effect.id} className={effect.kind} title="Clique para remover" onClick={() => updateCharacter("effects", character.effects.filter((entry) => entry.id !== effect.id))}><span>{effect.name}</span><X size={13} /></button>)}</div><select aria-label="Adicionar condição" defaultValue="" onChange={(e) => { if (e.target.value) addEffect(e.target.value); e.target.value = ""; }}><option value="">+ Condição</option>{commonConditions.map((condition) => <option key={condition}>{condition}</option>)}</select><button className="tiny-add buff" onClick={() => addEffect("Novo bônus", "buff")}>+ Bônus</button><button className="tiny-add debuff" onClick={() => addEffect("Nova penalidade", "debuff")}>+ Penalidade</button></section>
@@ -1746,7 +1990,7 @@ export default function HomePage() {
             <div className="sheet-panels">
               <section className="sheet-card"><div className="panel-title"><span>Salvaguardas</span><small>Prof. {signed(pb)}</small></div>{abilities.map((ability) => { const proficient = selectedClass?.saves.includes(ability.key as never); const extra = overrides.saveBonuses[ability.key] ?? 0; return <div className="sheet-line" key={ability.key}><i className={proficient ? "filled" : ""} /><span>{ability.name}</span><strong>{signed(modifier(finalAbilities[ability.key]) + (proficient ? pb : 0) + extra)}</strong>{extra !== 0 && <small className="line-adjustment">{signed(extra)}</small>}</div>; })}</section>
               <section className="sheet-card skills-card"><div className="panel-title"><span>Perícias</span><small>Clique para treinar</small></div>{skills.map((skill) => { const speciesGranted = speciesGrantedSkill === skill.name; const backgroundGranted = backgroundGrantedSkills.has(skill.name); const manuallyProficient = character.proficientSkills.includes(skill.name); const proficient = effectiveProficientSkills.has(skill.name); const extra = overrides.skillBonuses[skill.name] ?? 0; const value = modifier(finalAbilities[skill.ability]) + (proficient ? pb : 0) + extra; return <button className="sheet-line" key={skill.name} title={speciesGranted ? `Concedida por ${selectedSpecies?.name}` : backgroundGranted ? `Concedida por ${selectedBackground?.name}` : "Clique para alternar proficiência"} onClick={() => { if (!speciesGranted && !backgroundGranted) updateCharacter("proficientSkills", manuallyProficient ? character.proficientSkills.filter((entry) => entry !== skill.name) : [...character.proficientSkills, skill.name]); }}><i className={proficient ? "filled" : ""} /><span>{skill.name}<small>{skill.ability.toUpperCase()}{speciesGranted ? ` · ${selectedSpecies?.name}` : backgroundGranted ? ` · ${selectedBackground?.name}` : ""}</small></span><strong>{signed(value)}</strong>{extra !== 0 && <small className="line-adjustment">{signed(extra)}</small>}</button>; })}</section>
-              <section className="sheet-card"><div className="panel-title"><span>Conjuração</span><small>{selectedSpellcastingProfile.edition === "custom" ? "manual" : selectedSpellcastingProfile.edition}</small></div>{spellAbility ? <><div className="magic-number"><span>CD para resistir</span><strong>{spellDc}</strong></div><div className="magic-number"><span>Ataque mágico</span><strong>{signed(spellAttack)}</strong></div><div className="magic-number"><span>Atributo</span><strong>{spellAbility.toUpperCase()}</strong></div><div className="sheet-slot-summary">{currentSpellcastingRow?.pactSlots ? <span>{currentSpellcastingRow.pactSlots} espaços de Pacto · {currentSpellcastingRow.pactLevel}º</span> : currentSpellcastingRow?.slots.map((count, index) => count > 0 ? <span key={index}>{index + 1}º × {count}</span> : null)}</div><button className="text-link" onClick={() => navigate("progressao")}>Abrir progressão completa <ChevronRight size={15} /></button><button className="text-link" onClick={() => navigate("magias")}>Escolher magias <ChevronRight size={15} /></button></> : <><p className="muted-copy">Sua classe não possui conjuração básica. Talentos ou subclasses ainda podem conceder magia.</p><button className="text-link" onClick={() => navigate("progressao")}>Configurar na Progressão <ChevronRight size={15} /></button></>}</section>
+              <section className="sheet-card multiclass-magic-card"><div className="panel-title"><span>Conjuração</span><small>{classLevelEntries.length > 1 ? "multiclasse" : selectedSpellcastingProfile.edition === "custom" ? "manual" : selectedSpellcastingProfile.edition}</small></div>{spellStatsByClass.length || spellAbility ? <><div className="class-spell-stats">{spellStatsByClass.length > 0 ? spellStatsByClass.map((stat) => <div key={stat.entry.id}><span>{stat.className} {stat.entry.level}<small>{stat.ability?.toUpperCase() ?? "—"} · {stat.entry.ruleset}</small></span><strong>CD {stat.dc}<small>ataque {signed(stat.attack)}</small></strong></div>) : <div><span>Progressão personalizada<small>{spellAbility?.toUpperCase()}</small></span><strong>CD {spellDc}<small>ataque {signed(spellAttack)}</small></strong></div>}</div>{displayedSharedSpellcastingRow && <div className="spell-slot-block"><span>{character.spellcastingMode === "manual" ? "Espaços personalizados" : `Espaços compartilhados · conjurador efetivo ${sharedCasterLevel}`}</span><div className="sheet-slot-summary">{displayedSharedSpellcastingRow.slots.map((count, index) => count > 0 ? <span key={index}>{index + 1}º × {count}</span> : null)}</div></div>}{pactRows.map(({ entry, row }) => row?.pactSlots ? <div className="spell-slot-block pact" key={entry.id}><span>Magia de Pacto · Bruxo {entry.level}</span><div className="sheet-slot-summary"><span>{row.pactSlots} × {row.pactLevel}º círculo</span></div></div> : null)}<button className="text-link" onClick={() => navigate("progressao")}>Abrir progressão completa <ChevronRight size={15} /></button><button className="text-link" onClick={() => navigate("magias")}>Escolher magias <ChevronRight size={15} /></button></> : <><p className="muted-copy">Nenhuma das classes atuais possui conjuração básica. Talentos ou subclasses ainda podem conceder magia.</p><button className="text-link" onClick={() => navigate("progressao")}>Configurar na Progressão <ChevronRight size={15} /></button></>}</section>
             </div>
           </div>
         </div>
@@ -1778,7 +2022,7 @@ export default function HomePage() {
             </div>
             <div>
               <div className="feature-column-head"><strong>Classe e personalizados</strong><button aria-label="Adicionar nova habilidade de classe" title="Adicionar nova habilidade" onClick={() => openFeatureEditor("classe")}><Plus size={14} /></button></div>
-              {progression.filter((feature) => feature.level <= character.level).slice(-8).map((feature) => { const baseKey = `${character.classId}:class:${feature.level}:${feature.name}`; const override = character.featureNotes.find((note) => note.baseKey === baseKey); const name = override?.name ?? feature.name; const summary = override?.summary ?? featureDetail(feature.name, feature.summary); return <article className="feature-note automatic interactive" key={baseKey}><button className="feature-note-main" onClick={() => setActiveFeature({ name, summary, source: override?.source ?? feature.source, level: feature.level, unlocked: true, access: override?.access ?? feature.access })}><strong>{name}</strong><p>{summary}</p><small>Nível {feature.level} · {sourceShort(override?.source ?? feature.source)}</small></button><button className="feature-edit-button" aria-label={`Editar ${name}`} title="Editar esta habilidade" onClick={() => openFeatureEditor("classe", { name, summary, source: override?.source ?? feature.source, access: override?.access ?? feature.access, baseKey })}><Pencil size={14} /></button></article>; })}
+              {classFeatureEntries.slice(-12).map((feature) => { const baseKey = `${feature.ruleset}:${feature.classId}:class:${feature.level}:${feature.name}`; const override = character.featureNotes.find((note) => note.baseKey === baseKey); const name = override?.name ?? feature.name; const summary = override?.summary ?? featureDetail(feature.name, feature.summary); return <article className="feature-note automatic interactive" key={baseKey}><button className="feature-note-main" onClick={() => setActiveFeature({ name, summary, source: override?.source ?? feature.source, level: feature.level, unlocked: true, access: override?.access ?? feature.access })}><strong>{name}</strong><p>{summary}</p><small>{feature.className} {feature.level} · {sourceShort(override?.source ?? feature.source)}</small></button><button className="feature-edit-button" aria-label={`Editar ${name}`} title="Editar esta habilidade" onClick={() => openFeatureEditor("classe", { name, summary, source: override?.source ?? feature.source, access: override?.access ?? feature.access, baseKey })}><Pencil size={14} /></button></article>; })}
               {character.featureNotes.filter((note) => note.origin !== "espécie" && !note.baseKey).map((note) => <FeatureNoteCard key={note.id} note={note} onOpen={() => setActiveFeature({ name: note.name, summary: note.summary, source: note.source, level: 1, unlocked: true, access: note.access })} onEdit={() => setFeatureEditor(note)} />)}
             </div>
           </div>
@@ -1794,7 +2038,7 @@ export default function HomePage() {
     );
   };
 
-  const renderProgression = () => {
+  const renderSingleClassProgression = () => {
     const viewedLevel = Math.max(1, Math.min(20, selectedProgressionLevel));
     const viewedFeatures = progression.filter((feature) => feature.level === viewedLevel);
     const viewedMagic = effectiveSpellcastingRows[viewedLevel - 1];
@@ -1842,6 +2086,44 @@ export default function HomePage() {
           <div className="spellcasting-table-scroll"><table className="spellcasting-table progression-table"><thead><tr><th>Nível</th><th>Prof.</th><th>Características</th><th>Truques</th><th>{selectedSpellcastingProfile.preparedLabel}</th>{Array.from({ length: 9 }, (_, index) => <th key={index}>{index + 1}º</th>)}<th>Pacto</th><th>Observação</th></tr></thead><tbody>{effectiveSpellcastingRows.map((row) => { const manual = character.spellcastingMode === "manual"; const features = progression.filter((feature) => feature.level === row.level); return <tr key={row.level} className={`${row.level === character.level ? "current" : ""} ${row.level === viewedLevel ? "selected-row" : ""}`} onClick={() => setSelectedProgressionLevel(row.level)}><th>{row.level}</th><td>{signed(proficiency(row.level))}</td><td className="feature-cell">{features.length ? features.map((feature) => feature.name).join(" · ") : "—"}</td><td>{manual ? <input aria-label={`Truques no nível ${row.level}`} type="number" min={0} value={row.cantrips ?? ""} onClick={(event) => event.stopPropagation()} onChange={(event) => updateSpellcastingRow(row.level, { cantrips: event.target.value === "" ? null : Number(event.target.value) })} /> : row.cantrips ?? "—"}</td><td>{manual ? <input aria-label={`${selectedSpellcastingProfile.preparedLabel} no nível ${row.level}`} type="number" min={0} value={row.prepared ?? ""} onClick={(event) => event.stopPropagation()} onChange={(event) => updateSpellcastingRow(row.level, { prepared: event.target.value === "" ? null : Number(event.target.value) })} /> : row.prepared ?? "fórmula"}</td>{row.slots.map((slot, circle) => <td key={circle}>{manual ? <input aria-label={`Espaços de ${circle + 1}º círculo no nível ${row.level}`} type="number" min={0} value={slot} onClick={(event) => event.stopPropagation()} onChange={(event) => updateSpellSlot(row.level, circle, Number(event.target.value))} /> : slot || "—"}</td>)}<td>{manual ? <div className="pact-inputs"><input aria-label={`Espaços de pacto no nível ${row.level}`} type="number" min={0} value={row.pactSlots} onClick={(event) => event.stopPropagation()} onChange={(event) => updateSpellcastingRow(row.level, { pactSlots: Number(event.target.value) })} /><span>×</span><input aria-label={`Círculo dos espaços de pacto no nível ${row.level}`} type="number" min={0} max={9} value={row.pactLevel} onClick={(event) => event.stopPropagation()} onChange={(event) => updateSpellcastingRow(row.level, { pactLevel: Number(event.target.value) })} /></div> : row.pactSlots ? `${row.pactSlots}× ${row.pactLevel}º` : "—"}</td><td>{manual ? <input className="note-input" aria-label={`Observação do nível ${row.level}`} value={row.note} onClick={(event) => event.stopPropagation()} onChange={(event) => updateSpellcastingRow(row.level, { note: event.target.value })} /> : row.note || character.progressionNotes[String(row.level)] || "—"}</td></tr>; })}</tbody></table></div>
         </section>
         <section className="spellcasting-footnote"><BookMarked size={18} /><div><strong>Automático não significa engessado</strong><p>Conjuradores completos, meio conjuradores, Magia de Pacto e subclasses de um terço recebem suas tabelas próprias. A exceção permite trocar o modelo inteiro; “Editar célula por célula” transforma a tabela atual em uma versão exclusiva da ficha.</p></div></section>
+      </div>
+    );
+  };
+
+  const renderProgression = () => {
+    if (classLevelEntries.length <= 1) return renderSingleClassProgression();
+
+    const focusedEntry = classLevelEntries.find((entry) => entry.id === progressionClassEntryId) ?? classLevelEntries[0];
+    const focusedClass = classes.find((entry) => entry.id === focusedEntry.classId);
+    const focusedProgression = focusedEntry.ruleset === "2024" ? (classProgressions[focusedEntry.classId] ?? []) : (legacyClassProgressions[focusedEntry.classId] ?? []);
+    const focusedProfileId = automaticSpellcastingProfileId(focusedEntry.classId, focusedEntry.subclassId, focusedEntry.ruleset);
+    const focusedProfile = spellcastingProfiles.find((profile) => profile.id === focusedProfileId) ?? spellcastingProfiles.at(-1)!;
+    const focusedRows = focusedProfile.rows;
+    const viewedLevel = Math.max(1, Math.min(20, selectedProgressionLevel));
+    const viewedFeatures = focusedProgression.filter((feature) => feature.level === viewedLevel);
+    const viewedMagic = focusedRows[viewedLevel - 1];
+    const viewedUnlocked = viewedLevel <= focusedEntry.level;
+    const hypotheticalTotalLevel = Math.min(20, character.level - focusedEntry.level + viewedLevel);
+    const focusedSpellStat = spellStatsByClass.find((stat) => stat.entry.id === focusedEntry.id);
+    return (
+      <div className="view-enter progression-view multiclass-progression-view">
+        <div className="page-title"><div><span className="eyebrow">Progressão multiclasse</span><h1>Cada classe cresce na própria trilha.</h1><p>O nível total controla proficiência e truques. O nível de cada classe libera suas habilidades, subclasse e magias preparadas ou conhecidas.</p></div><button className="ghost-button" onClick={() => { setBuilderStep(2); navigate("criador"); }}><Network size={17} />Gerenciar classes</button></div>
+
+        <section className="multiclass-track-picker"><div className="module-head"><div><span className="eyebrow">Composição · nível total {character.level}</span><h2>{classDisplay}</h2><p>Escolha uma trilha para consultar ou planejar. Alterar uma delas recalcula o total automaticamente.</p></div><span className={`requirement-pill ${multiclassFailures.length ? "required" : "complete"}`}>{multiclassFailures.length ? "REQUISITOS PENDENTES" : "COMPOSIÇÃO VÁLIDA"}</span></div><div className="multiclass-track-grid">{classLevelEntries.map((entry, index) => { const definition = classes.find((candidate) => candidate.id === entry.classId); const active = entry.id === focusedEntry.id; return <button key={entry.id} className={active ? "active" : ""} onClick={() => { setProgressionClassEntryId(entry.id); setSelectedProgressionLevel(entry.level); }}><span>{index === 0 ? "INICIAL" : `CLASSE ${index + 1}`}</span><strong>{definition?.name}</strong><small>Nível {entry.level} · {entry.ruleset} · d{definition?.die}</small><i style={{ width: `${entry.level / 20 * 100}%` }} /></button>; })}</div></section>
+
+        <section className="multiclass-magic-overview"><div className="module-head"><div><span className="eyebrow">Motor inteligente de magia</span><h2>Espaços combinados; repertórios separados.</h2><p>Você aprende e prepara magias como membro individual de cada classe. Apenas os espaços comuns são combinados. Magia de Pacto permanece separada e recupera conforme Bruxo.</p></div>{character.spellcastingMode === "manual" && <span className="requirement-pill required">EXCEÇÃO MANUAL</span>}</div><div className="magic-engine-grid"><article><span>Nível de conjurador efetivo</span><strong>{sharedCasterLevel || "—"}</strong><small>Completo + metade/terço conforme classe, subclasse e edição.</small></article><article className="shared-slots"><span>{character.spellcastingMode === "manual" ? "Espaços personalizados" : "Espaços compartilhados"}</span><div>{displayedSharedSpellcastingRow?.slots.some(Boolean) ? displayedSharedSpellcastingRow.slots.map((count, index) => count ? <b key={index}>{index + 1}º × {count}</b> : null) : <small>Nenhum espaço comum.</small>}</div></article>{pactRows.map(({ entry, row }) => <article className="pact-slots" key={entry.id}><span>Magia de Pacto · Bruxo {entry.level}</span><strong>{row?.pactSlots ? `${row.pactSlots} × ${row.pactLevel}º` : "—"}</strong><small>Separados; retornam em Descanso Curto ou Longo.</small></article>)}</div><div className="class-casting-grid">{spellStatsByClass.map((stat) => <article key={stat.entry.id}><span>{stat.className} {stat.entry.level}<small>{stat.entry.ruleset}</small></span><dl><div><dt>Atributo</dt><dd>{stat.ability?.toUpperCase() ?? "—"}</dd></div><div><dt>CD</dt><dd>{stat.dc}</dd></div><div><dt>Ataque</dt><dd>{signed(stat.attack)}</dd></div></dl></article>)}</div></section>
+
+        <section className="progression-overview"><div><span>Trilha em foco</span><strong>{focusedClass?.name}</strong><small>{focusedEntry.ruleset} · nível {focusedEntry.level} nessa classe</small></div><div className="current-level-overview"><span>Nível total</span><strong>{character.level}</strong><small>Proficiência {signed(pb)}</small></div><div><span>Progressão da classe</span><strong>{focusedProfile.label}</strong><small>{focusedProfile.kind === "pact" ? "Magia de Pacto separada" : focusedProfile.description}</small></div><div><span>Conjuração da classe</span><strong>{focusedSpellStat ? `CD ${focusedSpellStat.dc}` : "—"}</strong><small>{focusedSpellStat?.ability ? `${focusedSpellStat.ability.toUpperCase()} · ataque ${signed(focusedSpellStat.attack)}` : "Sem conjuração nesta trilha"}</small></div></section>
+
+        <section className="level-navigator-panel"><div className="module-head"><div><span className="eyebrow">Níveis de {focusedClass?.name} 1–20</span><h2>Investigue a trilha da classe</h2><p>O marcador atual usa o nível de {focusedClass?.name}; a proficiência continua usando o nível total do personagem.</p></div><span className="requirement-pill complete">NÍVEL {viewedLevel} EM FOCO</span></div><div className="level-navigator">{Array.from({ length: 20 }, (_, index) => index + 1).map((level) => { const features = focusedProgression.filter((feature) => feature.level === level); const magic = focusedRows[level - 1]; const changesMagic = Boolean(magic?.pactSlots || magic?.slots.some(Boolean) || magic?.cantrips || magic?.prepared); return <button key={level} className={`${level === focusedEntry.level ? "current" : ""} ${level === viewedLevel ? "selected" : ""} ${level > focusedEntry.level ? "future" : ""}`} onClick={() => setSelectedProgressionLevel(level)}><span>{level}</span><div><strong>{focusedClass?.name} {level}</strong><small>{features.length ? features.map((feature) => feature.name).join(" · ") : changesMagic ? "A conjuração da classe evolui" : "Progressão contínua"}</small></div></button>; })}</div></section>
+
+        <section className="level-inspector"><div className="level-inspector-head"><div><span className="eyebrow">Leitura da classe</span><h2>{focusedClass?.name} {viewedLevel}</h2><p>{viewedUnlocked ? `Este nível já faz parte da ficha. Nível total atual: ${character.level}.` : `Prévia: se apenas esta trilha mudar, o personagem iria para o nível total ${hypotheticalTotalLevel}.`}</p></div>{viewedLevel !== focusedEntry.level && <button className="primary-button" onClick={() => updateClassEntryLevel(focusedEntry.id, viewedLevel)}>Definir {focusedClass?.name} como nível {viewedLevel}</button>}</div><div className="level-inspector-grid"><article><span className="inspector-label">Estrutura</span><dl><div><dt>Nível da classe</dt><dd>{viewedLevel}</dd></div><div><dt>Nível total projetado</dt><dd>{hypotheticalTotalLevel}</dd></div><div><dt>Proficiência projetada</dt><dd>{signed(proficiency(hypotheticalTotalLevel))}</dd></div><div><dt>Dado de Vida</dt><dd>d{focusedClass?.die}</dd></div></dl></article><article className="level-features"><span className="inspector-label">Habilidades recebidas</span>{viewedFeatures.length ? viewedFeatures.map((feature) => <button key={`${feature.level}-${feature.name}`} onClick={() => setActiveFeature({ ...feature, unlocked: viewedUnlocked })}><strong>{feature.name}</strong><small>{feature.summary}</small><ChevronRight size={16} /></button>) : <div className="level-empty"><strong>Nenhuma habilidade nova</strong><p>Dados de Vida e recursos anteriores ainda acompanham este nível.</p></div>}</article><article><span className="inspector-label">Magia desta classe</span><dl><div><dt>Truques da classe</dt><dd>{viewedMagic?.cantrips ?? "—"}</dd></div><div><dt>{focusedProfile.preparedLabel}</dt><dd>{viewedMagic?.prepared ?? "por fórmula"}</dd></div></dl><div className="viewed-slots">{focusedProfile.kind === "pact" && viewedMagic?.pactSlots ? <span>{viewedMagic.pactSlots} espaços de Pacto de {viewedMagic.pactLevel}º</span> : <small>Os espaços comuns reais aparecem no motor combinado acima.</small>}</div></article></div><label className="progression-note"><span>Anotação de {focusedClass?.name} {viewedLevel}</span><textarea value={character.progressionNotes[`${focusedEntry.id}:${viewedLevel}`] ?? ""} onChange={(event) => updateCharacter("progressionNotes", { ...character.progressionNotes, [`${focusedEntry.id}:${viewedLevel}`]: event.target.value })} placeholder="Talento, escolha de subclasse, regra do mestre ou lembrete desta trilha…" /></label></section>
+
+        <section className="spellcasting-controls progression-magic-controls"><div><span className="eyebrow">Exceção da mesa</span><h3>{character.spellcastingMode === "auto" ? "Cálculo oficial combinado" : "Tabela personalizada ativa"}</h3><p>{character.spellcastingMode === "auto" ? "A ficha combina automaticamente os níveis de conjurador. Use uma exceção somente quando uma regra da mesa ou subclasse exigir outra tabela." : "A tabela manual substitui os espaços compartilhados do personagem; Magia de Pacto continua indicada separadamente."}</p></div><div className="spellcasting-control-fields"><label>{character.spellcastingMode === "auto" ? "Usar uma exceção" : "Tabela-base da exceção"}<select value={character.spellcastingMode === "auto" ? "" : character.spellcastingProfileId} onChange={(event) => event.target.value && chooseSpellcastingProfile(event.target.value)}><option value="">Seguir cálculo multiclasse</option>{spellcastingProfiles.filter((profile) => profile.id !== "none").map((profile) => <option key={profile.id} value={profile.id}>{profile.label} · {profile.edition}</option>)}</select></label>{character.spellcastingMode === "auto" ? <button className="ghost-button" onClick={() => { const base = sharedSpellcastingProfile; setCharacter((current) => ({ ...current, spellcastingMode: "manual", spellcastingProfileId: base.id, spellcastingRows: cloneSpellcastingRows(base.rows) })); }}><Pencil size={15} />Editar espaços por nível total</button> : <button className="ghost-button" onClick={() => setCharacter((current) => ({ ...current, spellcastingMode: "auto", spellcastingRows: [] }))}><Sparkles size={15} />Restaurar cálculo oficial</button>}</div></section>
+
+        {character.spellcastingMode === "manual" && <section className="spellcasting-table-panel progression-table-panel"><div className="module-head"><div><span className="eyebrow">Tabela excepcional</span><h2>Espaços por nível total</h2><p>Esta tabela substitui somente o conjunto compartilhado. Clique e edite as células para refletir a regra da mesa.</p></div><span className="requirement-pill required">EDIÇÃO MANUAL</span></div><div className="spellcasting-table-scroll"><table className="spellcasting-table progression-table"><thead><tr><th>Nível total</th>{Array.from({ length: 9 }, (_, index) => <th key={index}>{index + 1}º</th>)}<th>Observação</th></tr></thead><tbody>{effectiveSpellcastingRows.map((row) => <tr key={row.level} className={row.level === character.level ? "current" : ""}><th>{row.level}</th>{row.slots.map((slot, circle) => <td key={circle}><input aria-label={`Espaços de ${circle + 1}º círculo no nível total ${row.level}`} type="number" min={0} value={slot} onChange={(event) => updateSpellSlot(row.level, circle, Number(event.target.value))} /></td>)}<td><input className="note-input" aria-label={`Observação do nível total ${row.level}`} value={row.note} onChange={(event) => updateSpellcastingRow(row.level, { note: event.target.value })} /></td></tr>)}</tbody></table></div></section>}
+
+        <section className="spellcasting-footnote"><BookMarked size={18} /><div><strong>Mago + Bruxo, sem escolher um vencedor</strong><p>O Mago mantém grimório, preparo por nível de Mago e Inteligência. O Bruxo mantém magias de Bruxo, Carisma e espaços de Pacto. Os espaços de Pacto podem conjurar magias preparadas de outra classe, e os espaços comuns podem conjurar magias de Bruxo, desde que a magia seja conhecida ou preparada.</p></div></section>
       </div>
     );
   };
@@ -1917,7 +2199,7 @@ export default function HomePage() {
   const renderLibrary = () => (
     <div className="view-enter library-view">
       <div className="page-title"><div><span className="eyebrow">Banco persistente</span><h1>Suas fichas, além deste dispositivo.</h1><p>Salve versões completas no banco do Arcana, abra outro personagem ou importe uma ficha enviada por um jogador.</p></div><div className="page-title-actions"><button className="ghost-button" onClick={startNewCharacter}><Plus size={16} />Nova ficha</button><button className="ghost-button" onClick={() => libraryImportInput.current?.click()}><FileUp size={16} />Importar ficha</button><input ref={libraryImportInput} type="file" accept="application/json,.json" onChange={importCharacter} hidden /><button className="primary-button" onClick={saveCharacterToCloud} disabled={cloudBusy}><Save size={16} />{character.cloudId ? "Atualizar ficha" : "Salvar ficha atual"}</button></div></div>
-      <section className="library-current"><div className="library-avatar">{character.portrait ? <img src={character.portrait} alt="" /> : <UserRound size={26} />}</div><div><span className="eyebrow">Aberta agora</span><h2>{character.name || "Ficha ainda sem nome"}</h2><p>{[selectedSpecies?.name, selectedClass?.name, selectedSubclass?.name, `nível ${character.level}`].filter(Boolean).join(" · ")}</p></div><span className={`cloud-state ${character.cloudId ? "saved" : ""}`}>{character.cloudId ? "NO BANCO" : "SÓ NESTE DISPOSITIVO"}</span></section>
+      <section className="library-current"><div className="library-avatar">{character.portrait ? <img src={character.portrait} alt="" /> : <UserRound size={26} />}</div><div><span className="eyebrow">Aberta agora</span><h2>{character.name || "Ficha ainda sem nome"}</h2><p>{[selectedSpecies?.name, classDisplay, `nível ${character.level}`].filter(Boolean).join(" · ")}</p></div><span className={`cloud-state ${character.cloudId ? "saved" : ""}`}>{character.cloudId ? "NO BANCO" : "SÓ NESTE DISPOSITIVO"}</span></section>
       {cloudError && <div className="cloud-error"><CircleHelp size={18} /><span>{cloudError}</span><button onClick={refreshCloudRecords}>Tentar novamente</button></div>}
       <div className="library-heading"><div><span className="eyebrow">Personagens salvos</span><h2>Banco de fichas</h2></div><button className="bare-button" onClick={refreshCloudRecords} disabled={cloudBusy}><RotateCcw size={16} /></button></div>
       {cloudBusy && !cloudRecords.length ? <div className="library-loading"><Database size={24} /><span>Consultando o banco…</span></div> : cloudRecords.length ? <div className="library-grid">{cloudRecords.map((record) => <article key={record.id} className={record.id === character.cloudId ? "active" : ""}><div className="library-card-top"><span>NÍVEL {record.level}</span><small>{new Date(record.updatedAt).toLocaleDateString("pt-BR")}</small></div><h3>{record.name}</h3><p>{record.summary || "Personagem sem resumo mecânico"}</p><small>{record.player ? `Jogador: ${record.player}` : "Jogador não informado"}</small><div><button className="ghost-button" onClick={() => loadCharacterFromCloud(record.id)} disabled={cloudBusy}>Abrir ficha</button><button className="bare-button danger" aria-label={`Excluir ${record.name}`} onClick={() => deleteCharacterFromCloud(record.id)} disabled={cloudBusy}><Trash2 size={16} /></button></div></article>)}</div> : <div className="library-empty"><Database size={31} /><h3>O banco ainda está vazio.</h3><p>Salve a ficha aberta para criar o primeiro registro persistente.</p><button className="primary-button" onClick={saveCharacterToCloud} disabled={cloudBusy}><Save size={16} />Salvar primeira ficha</button></div>}
@@ -1971,6 +2253,7 @@ export default function HomePage() {
             <IconButton label="Ajustes" onClick={() => setSettingsOpen(true)}><Settings size={18} /></IconButton>
           </div>
         </header>
+        {mixedEditionWarningOpen && pendingMulticlass && <div className="modal-layer" onMouseDown={() => { setMixedEditionWarningOpen(false); setPendingMulticlass(null); }}><article className="modal mixed-edition-modal" onMouseDown={(event) => event.stopPropagation()}><button className="modal-close" onClick={() => { setMixedEditionWarningOpen(false); setPendingMulticlass(null); }}><X /></button><span className="eyebrow"><CircleHelp size={14} /> Compatibilidade entre edições</span><h2>Você está misturando classes de 2024 e 2014.</h2><p className="lead">A ficha consegue calcular níveis, requisitos e espaços de magia, mas essas versões não foram projetadas como uma única progressão balanceada. Algumas características podem se sobrepor ou produzir combinações mais fortes do que o esperado.</p><div className="mixed-edition-advice"><Shield size={20} /><div><strong>Converse com o mestre antes da sessão.</strong><p>Continuar não bloqueia a ficha. A mesa só precisa decidir como resolver conflitos entre os textos das duas edições.</p></div></div><label className="warning-checkbox"><input type="checkbox" checked={hideMixedEditionWarning} onChange={(event) => setHideMixedEditionWarning(event.target.checked)} /><span>Não mostrar este aviso novamente neste dispositivo</span></label><div className="modal-actions"><button className="ghost-button" onClick={() => { setMixedEditionWarningOpen(false); setPendingMulticlass(null); }}>Cancelar</button><button className="primary-button" onClick={() => { if (hideMixedEditionWarning) localStorage.setItem("arcana-hide-mixed-multiclass-warning-v1", "true"); if (pendingMulticlass.mode === "primary") chooseClass(pendingMulticlass.classId, pendingMulticlass.ruleset); else addMulticlassNow(pendingMulticlass.classId, pendingMulticlass.ruleset); setMixedEditionWarningOpen(false); setPendingMulticlass(null); }}><Check size={16} />Continuar mesmo assim</button></div></article></div>}
         <main className="content-area">{renderSection()}</main>
       </div>
 
