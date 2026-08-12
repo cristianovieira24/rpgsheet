@@ -54,6 +54,81 @@ export function totalClassLevels(entries: ClassLevelEntry[]) {
   return entries.reduce((sum, entry) => sum + Math.max(0, entry.level), 0);
 }
 
+export function fitClassLevelsToBudget(
+  entries: ClassLevelEntry[],
+  requestedBudget: number,
+  preferredEntryId?: string,
+) {
+  if (!entries.length) return [];
+  const budget = Math.max(entries.length, Math.min(20, Math.floor(requestedBudget) || 1));
+  const next = entries.map((entry) => ({ ...entry, level: Math.max(1, Math.floor(entry.level) || 1) }));
+  const preferredIndex = Math.max(0, next.findIndex((entry) => entry.id === preferredEntryId));
+  const difference = budget - totalClassLevels(next);
+
+  if (difference > 0) {
+    next[preferredIndex] = { ...next[preferredIndex], level: next[preferredIndex].level + difference };
+    return next;
+  }
+
+  if (difference < 0) {
+    let excess = Math.abs(difference);
+    const reductionOrder = [
+      preferredIndex,
+      ...next.map((_, index) => index).filter((index) => index !== preferredIndex).reverse(),
+    ];
+    for (const index of reductionOrder) {
+      const removable = Math.min(excess, next[index].level - 1);
+      if (removable <= 0) continue;
+      next[index] = { ...next[index], level: next[index].level - removable };
+      excess -= removable;
+      if (!excess) break;
+    }
+  }
+
+  return next;
+}
+
+export function redistributeClassLevel(
+  entries: ClassLevelEntry[],
+  requestedBudget: number,
+  entryId: string,
+  requestedLevel: number,
+) {
+  if (!entries.length) return [];
+  const budget = Math.max(entries.length, Math.min(20, Math.floor(requestedBudget) || 1));
+  const balanced = fitClassLevelsToBudget(entries, budget);
+  const changedIndex = balanced.findIndex((entry) => entry.id === entryId);
+  if (changedIndex < 0) return balanced;
+  if (balanced.length === 1) return [{ ...balanced[0], level: budget }];
+
+  const maximum = budget - (balanced.length - 1);
+  const nextLevel = Math.max(1, Math.min(maximum, Math.floor(requestedLevel) || 1));
+  const delta = nextLevel - balanced[changedIndex].level;
+  if (!delta) return balanced;
+
+  const next = balanced.map((entry) => ({ ...entry }));
+  next[changedIndex].level = nextLevel;
+
+  if (delta > 0) {
+    let needed = delta;
+    const donorOrder = changedIndex === 0
+      ? next.map((_, index) => index).filter((index) => index !== changedIndex).reverse()
+      : [0, ...next.map((_, index) => index).filter((index) => index !== 0 && index !== changedIndex).reverse()];
+    for (const index of donorOrder) {
+      const donated = Math.min(needed, next[index].level - 1);
+      if (donated <= 0) continue;
+      next[index].level -= donated;
+      needed -= donated;
+      if (!needed) break;
+    }
+  } else {
+    const receiverIndex = changedIndex === 0 ? 1 : 0;
+    next[receiverIndex].level += Math.abs(delta);
+  }
+
+  return fitClassLevelsToBudget(next, budget, changedIndex === 0 ? next[1]?.id : next[0]?.id);
+}
+
 export function hasMixedClassEditions(entries: ClassLevelEntry[]) {
   return new Set(entries.map((entry) => entry.ruleset)).size > 1;
 }
