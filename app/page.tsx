@@ -9,12 +9,14 @@ import {
   ChevronLeft,
   ChevronRight,
   CircleHelp,
+  Crown,
   Dices,
   Database,
   Download,
   Eye,
   FileUp,
   FolderPlus,
+  Gamepad2,
   Heart,
   Home,
   ImagePlus,
@@ -78,6 +80,8 @@ import {
 import {
   backgroundFallbackPackage,
   classStartingEquipment,
+  legacyBackgroundEquipment,
+  legacyClassStartingEquipment,
   openBackgroundEquipment,
   type EquipmentOption,
 } from "./data/creation";
@@ -117,6 +121,18 @@ import {
   type CustomClassState,
   type CustomSpeciesState,
 } from "./data/custom";
+import {
+  arenaRewards,
+  arenaStages,
+  generateNpc,
+  type MasterNpc,
+} from "./data/master";
+import {
+  featBenefitPt,
+  featCategoryPt,
+  featNamesPt,
+  featPrerequisitePt,
+} from "./data/feat-localization";
 
 type Section =
   | "inicio"
@@ -130,7 +146,9 @@ type Section =
   | "codice"
   | "quadro"
   | "biblioteca"
-  | "regras";
+  | "regras"
+  | "mestre"
+  | "arena";
 type Theme =
   | "medieval"
   | "highfantasy"
@@ -328,7 +346,46 @@ const featNamePt: Record<string, string> = {
 };
 
 const featDisplayName = (feat: FeatDefinition) =>
-  featNamePt[feat.name] ?? feat.name.replace(/^Boon of /, "Dádiva de ");
+  featNamesPt[feat.name] ?? featNamePt[feat.name] ?? feat.name.replace(/^Boon of /, "Dádiva de ");
+const featDisplaySummary = (feat: FeatDefinition) =>
+  featBenefitPt[`${feat.ruleset}:${feat.name}`] ??
+  featBenefitPt[feat.name] ??
+  (featNamesPt[feat.name] || featNamePt[feat.name]
+    ? `Descrição original em inglês preservada pelo banco: ${feat.summary}`
+    : feat.summary);
+const featDisplayCategory = (feat: FeatDefinition) =>
+  featCategoryPt[feat.category] ?? feat.category ?? "Geral";
+const featDisplayPrerequisite = (feat: FeatDefinition) =>
+  featPrerequisitePt(feat.prerequisite || "") || "Sem pré-requisito";
+
+const quickStatsFor = (snapshot: CharacterState) => {
+  const dexterity = snapshot.abilities.dex ?? 10;
+  const constitution = snapshot.abilities.con ?? 10;
+  const wisdom = snapshot.abilities.wis ?? 10;
+  const dexMod = Math.floor((dexterity - 10) / 2);
+  const conMod = Math.floor((constitution - 10) / 2);
+  const wisMod = Math.floor((wisdom - 10) / 2);
+  const classDefinition = classes.find((entry) => entry.id === snapshot.classId);
+  const hitDie =
+    snapshot.classId === "custom"
+      ? snapshot.customClass.hitDie
+      : (classDefinition?.die ?? 8);
+  const estimatedMaximum = Math.max(
+    1,
+    hitDie + conMod + Math.max(0, snapshot.level - 1) * (Math.floor(hitDie / 2) + 1 + conMod),
+  );
+  return {
+    armorClass: snapshot.overrides.armorClass ?? 10 + dexMod,
+    maximumHitPoints: snapshot.overrides.maxHp ?? estimatedMaximum,
+    currentHitPoints: snapshot.currentHp || snapshot.overrides.maxHp || estimatedMaximum,
+    passivePerception:
+      snapshot.overrides.passivePerception ??
+      10 + wisMod +
+        (snapshot.proficientSkills.includes("Percepção")
+          ? proficiency(snapshot.level)
+          : 0),
+  };
+};
 type BoardNode = {
   id: string;
   x: number;
@@ -369,6 +426,8 @@ type CloudCharacterRecord = {
 type StaticCharacterRecord = CloudCharacterRecord & { data: string };
 
 type CharacterState = {
+  editionPolicy: "unanswered" | "mixed" | "locked";
+  lockedRuleset: Ruleset | "";
   cloudId: string;
   ruleset: Ruleset;
   speciesRuleset: Ruleset;
@@ -471,6 +530,8 @@ const defaultBoards: BoardState[] = [
 ];
 
 const defaultCharacter: CharacterState = {
+  editionPolicy: "unanswered",
+  lockedRuleset: "",
   cloudId: "",
   ruleset: "2024",
   speciesRuleset: "2024",
@@ -614,6 +675,11 @@ const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
   { id: "quadro", label: "Quadro", icon: Network },
   { id: "biblioteca", label: "Banco de fichas", icon: Database },
   { id: "regras", label: "Regras", icon: CircleHelp },
+];
+
+const masterNavItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
+  { id: "mestre", label: "Mestre", icon: Crown },
+  { id: "arena", label: "Arena", icon: Gamepad2 },
 ];
 
 const schoolPt: Record<string, string> = {
@@ -1100,6 +1166,14 @@ function normalizeCharacterData(raw: Partial<CharacterState>): CharacterState {
   return {
     ...defaultCharacter,
     ...raw,
+    editionPolicy:
+      raw.editionPolicy === "mixed" || raw.editionPolicy === "locked"
+        ? raw.editionPolicy
+        : "unanswered",
+    lockedRuleset:
+      raw.lockedRuleset === "2014" || raw.lockedRuleset === "2024"
+        ? raw.lockedRuleset
+        : "",
     cloudId: typeof raw.cloudId === "string" ? raw.cloudId : "",
     ruleset,
     speciesRuleset,
@@ -1517,6 +1591,19 @@ export default function HomePage() {
     "all",
   );
   const [activeFeat, setActiveFeat] = useState<FeatDefinition | null>(null);
+  const [masterUnlocked, setMasterUnlocked] = useState(false);
+  const [masterCharacters, setMasterCharacters] = useState<ImportPreviewState[]>([]);
+  const [masterNpcs, setMasterNpcs] = useState<MasterNpc[]>([]);
+  const [npcLevel, setNpcLevel] = useState(3);
+  const [npcRuleset, setNpcRuleset] = useState<Ruleset>("2024");
+  const [activeMasterCharacter, setActiveMasterCharacter] = useState<ImportPreviewState | null>(null);
+  const [arenaStage, setArenaStage] = useState(0);
+  const [arenaCharacterKey, setArenaCharacterKey] = useState("current");
+  const [arenaNode, setArenaNode] = useState(0);
+  const [arenaHp, setArenaHp] = useState(0);
+  const [arenaLog, setArenaLog] = useState<string[]>([]);
+  const [arenaRewardIds, setArenaRewardIds] = useState<string[]>([]);
+  const [arenaRewardChoices, setArenaRewardChoices] = useState<typeof arenaRewards>([]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -1592,6 +1679,9 @@ export default function HomePage() {
   const portraitInput = useRef<HTMLInputElement>(null);
   const importInput = useRef<HTMLInputElement>(null);
   const libraryImportInput = useRef<HTMLInputElement>(null);
+  const masterImportInput = useRef<HTMLInputElement>(null);
+  const npcPortraitInput = useRef<HTMLInputElement>(null);
+  const [npcPortraitTarget, setNpcPortraitTarget] = useState("");
   const glossaryImageInput = useRef<HTMLInputElement>(null);
 
   const allSpells = useMemo(() => {
@@ -1611,7 +1701,7 @@ export default function HomePage() {
       if (featEdition !== "all" && feat.ruleset !== featEdition) return false;
       return (
         !query ||
-        `${feat.name} ${feat.summary} ${feat.prerequisite} ${feat.source}`
+        `${feat.name} ${featDisplayName(feat)} ${feat.summary} ${featDisplaySummary(feat)} ${featDisplayPrerequisite(feat)} ${feat.source}`
           .toLocaleLowerCase("pt-BR")
           .includes(query)
       );
@@ -1900,9 +1990,13 @@ export default function HomePage() {
     },
     {} as Record<AbilityKey, number>,
   );
-  const classEquipment = classStartingEquipment[character.classId];
+  const classEquipment = revisedClassRules
+    ? classStartingEquipment[character.classId]
+    : legacyClassStartingEquipment[character.classId];
   const backgroundPackage = selectedBackground
-    ? (openBackgroundEquipment[selectedBackground.id] ??
+    ? ((revisedBackgroundRules
+        ? openBackgroundEquipment[selectedBackground.id]
+        : legacyBackgroundEquipment[selectedBackground.id]) ??
       backgroundFallbackPackage(
         selectedBackground.name,
         selectedBackground.tool,
@@ -2192,6 +2286,34 @@ export default function HomePage() {
   const selectedFeats = allFeats.filter((feat) =>
     character.selectedFeatIds.includes(feat.id),
   );
+  const toggleFeatSelection = (feat: FeatDefinition) => {
+    setCharacter((current) => {
+      const selected = current.selectedFeatIds.includes(feat.id);
+      if (
+        !selected &&
+        current.editionPolicy === "locked" &&
+        current.lockedRuleset &&
+        current.lockedRuleset !== feat.ruleset
+      ) {
+        window.alert(
+          `A mesa bloqueou a mistura de edições. Esta ficha usa ${current.lockedRuleset}, mas este talento é ${feat.ruleset}.`,
+        );
+        return current;
+      }
+      return {
+        ...current,
+        lockedRuleset:
+          !selected &&
+          current.editionPolicy === "locked" &&
+          !current.lockedRuleset
+            ? feat.ruleset
+            : current.lockedRuleset,
+        selectedFeatIds: selected
+          ? current.selectedFeatIds.filter((id) => id !== feat.id)
+          : [...current.selectedFeatIds, feat.id],
+      };
+    });
+  };
   const completion = [
     character.name,
     character.speciesId,
@@ -2220,6 +2342,7 @@ export default function HomePage() {
         const hiddenMixedWarning = localStorage.getItem(
           "arcana-hide-mixed-multiclass-warning-v1",
         );
+        const savedMaster = localStorage.getItem("arcana-master-v1");
         if (raw) {
           const parsed = JSON.parse(raw);
           const normalized = normalizeCharacterData(parsed);
@@ -2251,6 +2374,23 @@ export default function HomePage() {
         }
         if (custom) setCustomSpells(JSON.parse(custom));
         if (hiddenMixedWarning === "true") setHideMixedEditionWarning(true);
+        if (savedMaster) {
+          const parsed = JSON.parse(savedMaster);
+          if (Array.isArray(parsed.characters))
+            setMasterCharacters(
+              parsed.characters.flatMap((entry: ImportPreviewState) => {
+                try {
+                  return [{
+                    ...normalizeCharacterBundle(entry),
+                    fileName: entry.fileName || "ficha-importada.json",
+                  }];
+                } catch {
+                  return [];
+                }
+              }),
+            );
+          if (Array.isArray(parsed.npcs)) setMasterNpcs(parsed.npcs);
+        }
       } catch {
         // A malformed local draft should never prevent the app from opening.
       }
@@ -2289,6 +2429,19 @@ export default function HomePage() {
     customSpells,
     hydrated,
   ]);
+
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      localStorage.setItem(
+        "arcana-master-v1",
+        JSON.stringify({ characters: masterCharacters, npcs: masterNpcs }),
+      );
+    } catch {
+      // Retratos grandes podem exceder a cota do navegador; a sessão continua
+      // funcional e os arquivos originais dos jogadores seguem intactos.
+    }
+  }, [hydrated, masterCharacters, masterNpcs]);
 
   useEffect(() => {
     document.documentElement.style.setProperty("--font-scale", `${fontScale}%`);
@@ -2490,8 +2643,17 @@ export default function HomePage() {
     speciesId: string,
     speciesRuleset: Ruleset = character.speciesRuleset,
   ) => {
+    if (
+      character.editionPolicy === "locked" &&
+      character.lockedRuleset &&
+      speciesRuleset !== character.lockedRuleset
+    ) return;
     setCharacter((current) => ({
       ...current,
+      lockedRuleset:
+        current.editionPolicy === "locked" && !current.lockedRuleset
+          ? speciesRuleset
+          : current.lockedRuleset,
       speciesRuleset,
       speciesId,
       lineageId: "",
@@ -2517,6 +2679,11 @@ export default function HomePage() {
   };
 
   const chooseClass = (classId: string, classRuleset: Ruleset) => {
+    if (
+      character.editionPolicy === "locked" &&
+      character.lockedRuleset &&
+      classRuleset !== character.lockedRuleset
+    ) return;
     setCharacter((current) => {
       const existing = current.classLevels.length
         ? current.classLevels
@@ -2556,6 +2723,10 @@ export default function HomePage() {
       const next = fitClassLevelsToBudget(proposed, current.level);
       return {
         ...current,
+        lockedRuleset:
+          current.editionPolicy === "locked" && !current.lockedRuleset
+            ? classRuleset
+            : current.lockedRuleset,
         classRuleset,
         classId,
         subclassId: next[0].subclassId,
@@ -2642,6 +2813,9 @@ export default function HomePage() {
   const requestMulticlass = () => {
     if (
       !multiclassDraftClassId ||
+      (character.editionPolicy === "locked" &&
+        Boolean(character.lockedRuleset) &&
+        multiclassDraftRuleset !== character.lockedRuleset) ||
       noClassLevelBudget ||
       classLevelEntries.some(
         (entry) => entry.classId === multiclassDraftClassId,
@@ -2678,9 +2852,18 @@ export default function HomePage() {
     entry: (typeof backgrounds)[number] | LegacyBackgroundDefinition,
     backgroundRuleset: Ruleset = "feature" in entry ? "2014" : "2024",
   ) => {
+    if (
+      character.editionPolicy === "locked" &&
+      character.lockedRuleset &&
+      backgroundRuleset !== character.lockedRuleset
+    ) return;
     const allowed = entry.abilities as readonly AbilityKey[];
     setCharacter((current) => ({
       ...current,
+      lockedRuleset:
+        current.editionPolicy === "locked" && !current.lockedRuleset
+          ? backgroundRuleset
+          : current.lockedRuleset,
       backgroundRuleset,
       backgroundId: entry.id,
       languages:
@@ -3098,6 +3281,13 @@ export default function HomePage() {
         kind === "class"
           ? current.classStartingGp
           : current.backgroundStartingGp;
+      const rolledGp = option.roll
+        ? Array.from({ length: option.roll.count }, () =>
+            Math.floor(Math.random() * option.roll!.die) + 1,
+          ).reduce((sum, value) => sum + value, 0) * option.roll.multiplier
+        : option.gp;
+      const usesClassicWealth =
+        kind === "class" && current.classRuleset === "2014" && Boolean(option.roll);
       const newEntries: InventoryEntry[] = option.items.map((entry) => {
         const catalogItem = items.find(
           (item) => item.name.toLowerCase() === entry.name.toLowerCase(),
@@ -3118,18 +3308,32 @@ export default function HomePage() {
       return {
         ...current,
         inventory: [
-          ...current.inventory.filter((entry) => entry.origin !== origin),
+          ...current.inventory.filter((entry) =>
+            usesClassicWealth
+              ? entry.origin !== "class-start" && entry.origin !== "background-start"
+              : entry.origin !== origin,
+          ),
           ...newEntries,
         ],
         coins: {
           ...current.coins,
-          gp: Math.max(0, current.coins.gp - previousGp + option.gp),
+          gp: Math.max(
+            0,
+            current.coins.gp - previousGp -
+              (usesClassicWealth ? current.backgroundStartingGp : 0) + rolledGp,
+          ),
         },
         ...(kind === "class"
-          ? { classEquipmentChoice: option.id, classStartingGp: option.gp }
+          ? {
+              classEquipmentChoice: option.id,
+              classStartingGp: rolledGp,
+              ...(usesClassicWealth
+                ? { backgroundEquipmentChoice: "wealth-replaced", backgroundStartingGp: 0 }
+                : {}),
+            }
           : {
               backgroundEquipmentChoice: option.id,
-              backgroundStartingGp: option.gp,
+              backgroundStartingGp: rolledGp,
             }),
       };
     });
@@ -3371,6 +3575,49 @@ export default function HomePage() {
       }
     };
     reader.readAsText(file);
+  };
+
+  const importCharacterForMaster = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    if (!files.length) return;
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        try {
+          const bundle = normalizeCharacterBundle(JSON.parse(String(reader.result)));
+          setMasterCharacters((current) => [
+            ...current.filter(
+              (entry) =>
+                entry.character.cloudId !== bundle.character.cloudId ||
+                !bundle.character.cloudId,
+            ),
+            { ...bundle, fileName: file.name },
+          ]);
+        } catch {
+          window.alert(`${file.name} não parece ser uma ficha válida do Arcana.`);
+        }
+      };
+      reader.readAsText(file);
+    });
+    event.target.value = "";
+  };
+
+  const handleNpcPortraitUpload = async (
+    event: ChangeEvent<HTMLInputElement>,
+  ) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file || !npcPortraitTarget) return;
+    try {
+      const portrait = await imageFileToDataUrl(file, 700);
+      setMasterNpcs((current) =>
+        current.map((entry) =>
+          entry.id === npcPortraitTarget ? { ...entry, portrait } : entry,
+        ),
+      );
+    } catch {
+      window.alert("Não consegui processar a imagem deste NPC.");
+    }
   };
 
   const openImportedCharacter = () => {
@@ -3842,6 +4089,11 @@ export default function HomePage() {
     fixedSpeciesSkillConflict && !fixedSpeciesReplacement,
   );
   const builderGate = (() => {
+    if (builderStep === 0 && character.editionPolicy === "unanswered")
+      return {
+        ok: false,
+        reason: "Confirme com o mestre se conteúdos 2014 e 2024 podem ser combinados.",
+      };
     if (builderStep === 1 && !character.speciesId)
       return { ok: false, reason: "Escolha uma espécie para continuar." };
     if (builderStep === 1 && lineageIsRequired && !character.lineageId)
@@ -3919,6 +4171,90 @@ export default function HomePage() {
       return (
         <div className="builder-content two-column-form">
           <div>
+            <section className="edition-consent-card">
+              <span className="eyebrow">Aviso antes da criação</span>
+              <h2>Seu mestre permite combinar Legacy e New?</h2>
+              <p>
+                Pergunte antes de continuar. Essa escolha controla espécie,
+                classe, subclasse, antecedente, talentos e multiclasse. Ela
+                pode ser alterada aqui depois, mas escolhas incompatíveis serão
+                limpas para a ficha continuar coerente.
+              </p>
+              <div className="edition-consent-actions">
+                <button
+                  className={character.editionPolicy === "mixed" ? "selected" : ""}
+                  onClick={() =>
+                    setCharacter((current) => ({
+                      ...current,
+                      editionPolicy: "mixed",
+                      lockedRuleset: "",
+                    }))
+                  }
+                >
+                  <Check size={17} /> Sim, pode combinar
+                </button>
+                <button
+                  className={character.editionPolicy === "locked" ? "selected" : ""}
+                  onClick={() =>
+                    setCharacter((current) => ({
+                      ...current,
+                      editionPolicy: "locked",
+                      lockedRuleset: current.lockedRuleset,
+                    }))
+                  }
+                >
+                  <LockKeyhole size={17} /> Não, uma edição por ficha
+                </button>
+              </div>
+              {character.editionPolicy === "locked" && (
+                <div className="ruleset-lock-choice">
+                  <span>
+                    {character.lockedRuleset
+                      ? `Esta ficha está usando somente ${character.lockedRuleset === "2024" ? "NEW · 2024" : "LEGACY · 2014"}.`
+                      : "A primeira espécie, classe ou antecedente escolhido definirá automaticamente a edição desta ficha."}
+                  </span>
+                  {(["2024", "2014"] as Ruleset[]).map((ruleset) => (
+                    <button
+                      key={ruleset}
+                      className={character.lockedRuleset === ruleset ? "selected" : ""}
+                      onClick={() => {
+                        if (
+                          character.lockedRuleset &&
+                          character.lockedRuleset !== ruleset &&
+                          !window.confirm(
+                            "Trocar a edição vai limpar espécie, classes, antecedente e equipamentos incompatíveis. Continuar?",
+                          )
+                        ) return;
+                        setCharacter((current) => ({
+                          ...current,
+                          ruleset,
+                          speciesRuleset: ruleset,
+                          classRuleset: ruleset,
+                          backgroundRuleset: ruleset,
+                          lockedRuleset: ruleset,
+                          speciesId: "",
+                          lineageId: "",
+                          classId: "",
+                          subclassId: "",
+                          classLevels: [],
+                          backgroundId: "",
+                          selectedFeatIds: [],
+                          inventory: current.inventory.filter((item) => !item.origin),
+                          classEquipmentChoice: "",
+                          backgroundEquipmentChoice: "",
+                          classStartingGp: 0,
+                          backgroundStartingGp: 0,
+                        }));
+                      }}
+                    >
+                      {character.lockedRuleset
+                        ? `Mudar para ${ruleset === "2024" ? "NEW · 2024" : "LEGACY · 2014"}`
+                        : `Começar com ${ruleset === "2024" ? "NEW · 2024" : "LEGACY · 2014"}`}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </section>
             <span className="eyebrow">Primeiro, a pessoa</span>
             <h2>Quem vai entrar nessa história?</h2>
             <p className="lead">
@@ -4118,6 +4454,13 @@ export default function HomePage() {
             <section
               className={`catalog-edition-section ${group.edition === "2014" ? "legacy-catalog" : ""}`}
               key={group.edition}
+              data-disabled={
+                character.editionPolicy === "locked" &&
+                Boolean(character.lockedRuleset) &&
+                character.lockedRuleset !== group.edition
+                  ? "true"
+                  : undefined
+              }
             >
               <div className="edition-catalog-head">
                 <div>
@@ -4143,6 +4486,11 @@ export default function HomePage() {
                       key={`${group.edition}-${entry.source}-${entry.id}`}
                       title={entry.source}
                       className={`choice-card species-card ${selected ? "selected" : ""}`}
+                      disabled={
+                        character.editionPolicy === "locked" &&
+                        Boolean(character.lockedRuleset) &&
+                        character.lockedRuleset !== group.edition
+                      }
                       onClick={() => chooseSpecies(entry.id, group.edition)}
                     >
                       <span className="choice-check">
@@ -4846,6 +5194,13 @@ export default function HomePage() {
             <section
               className={`catalog-edition-section ${edition === "2014" ? "legacy-catalog" : ""}`}
               key={edition}
+              data-disabled={
+                character.editionPolicy === "locked" &&
+                Boolean(character.lockedRuleset) &&
+                character.lockedRuleset !== edition
+                  ? "true"
+                  : undefined
+              }
             >
               <div className="edition-catalog-head">
                 <div>
@@ -4871,6 +5226,11 @@ export default function HomePage() {
                     <button
                       key={`${edition}-${entry.id}`}
                       className={`choice-card class-card ${selected ? "selected" : ""}`}
+                      disabled={
+                        character.editionPolicy === "locked" &&
+                        Boolean(character.lockedRuleset) &&
+                        character.lockedRuleset !== edition
+                      }
                       onClick={() => requestPrimaryClass(entry.id, edition)}
                     >
                       <span className="die-badge">d{entry.die}</span>
@@ -5112,8 +5472,22 @@ export default function HomePage() {
                       }
                       disabled={noClassLevelBudget}
                     >
-                      <option value="2024">Revisado 2024</option>
-                      <option value="2014">Clássico 2014</option>
+                      <option
+                        value="2024"
+                        disabled={
+                          character.editionPolicy === "locked" &&
+                          Boolean(character.lockedRuleset) &&
+                          character.lockedRuleset !== "2024"
+                        }
+                      >Revisado 2024</option>
+                      <option
+                        value="2014"
+                        disabled={
+                          character.editionPolicy === "locked" &&
+                          Boolean(character.lockedRuleset) &&
+                          character.lockedRuleset !== "2014"
+                        }
+                      >Clássico 2014</option>
                     </select>
                   </label>
                   <button
@@ -5441,6 +5815,11 @@ export default function HomePage() {
                     <button
                       key={`${group.edition}-${entry.id}`}
                       className={`choice-card background-card ${selected ? "selected" : ""}`}
+                      disabled={
+                        character.editionPolicy === "locked" &&
+                        Boolean(character.lockedRuleset) &&
+                        character.lockedRuleset !== group.edition
+                      }
                       onClick={() => chooseBackground(entry, group.edition)}
                     >
                       <span className="choice-check">
@@ -6159,6 +6538,20 @@ export default function HomePage() {
             remove somente os itens e as moedas daquela escolha anterior, sem
             apagar o que você adicionou manualmente.
           </p>
+          {!revisedClassRules && (
+            <div className="classic-equipment-rule">
+              <BookOpen size={20} />
+              <div>
+                <strong>Regra de equipamento Legacy 2014</strong>
+                <p>
+                  Escolha as opções encadeadas da classe e receba também o
+                  pacote do antecedente. Como alternativa, role a riqueza
+                  inicial indicada pela classe; ao fazer isso, os dois pacotes
+                  são substituídos e você compra tudo manualmente.
+                </p>
+              </div>
+            </div>
+          )}
           <section className="equipment-choice-section">
             <div className="section-heading compact">
               <div>
@@ -6168,7 +6561,7 @@ export default function HomePage() {
                   {classEquipment
                     ? revisedClassRules
                       ? `Opções de ${classEquipment.source}.`
-                      : "Pacote guiado para a versão clássica. Confirme com o mestre as combinações exatas ou substitua pelo ouro inicial da classe."
+                      : `Escolhas clássicas completas de ${classEquipment.source}; a opção de riqueza faz a rolagem automaticamente.`
                     : "Volte à etapa Classe para liberar o equipamento."}
                 </p>
               </div>
@@ -6216,7 +6609,9 @@ export default function HomePage() {
                 <p>
                   {revisedRules
                     ? "No revisado, escolha o pacote ou 50 PO para comprar os próprios itens."
-                    : "No clássico, aplique o pacote temático do antecedente; a alternativa em ouro depende da classe e da decisão do mestre."}
+                    : character.classEquipmentChoice === "wealth"
+                      ? "A riqueza inicial da classe substituiu este pacote, conforme a regra de 2014."
+                      : "No clássico, este pacote é somado às escolhas da primeira classe."}
                 </p>
               </div>
               {character.backgroundEquipmentChoice && (
@@ -6225,19 +6620,19 @@ export default function HomePage() {
                 </span>
               )}
             </div>
-            {backgroundPackage && (
+            {backgroundPackage && character.classEquipmentChoice !== "wealth" && (
               <div className="equipment-options">
                 {[
                   backgroundPackage,
-                  {
-                    id: "gold",
-                    label: revisedRules ? "50 PO" : "Ouro inicial da mesa",
-                    summary: revisedRules
-                      ? "Receba 50 peças de ouro em vez do pacote."
-                      : "Registre 0 agora e ajuste a quantia após a rolagem ou definição do mestre.",
-                    items: [],
-                    gp: revisedRules ? 50 : 0,
-                  },
+                  ...(revisedRules
+                    ? [{
+                        id: "gold",
+                        label: "50 PO",
+                        summary: "Receba 50 peças de ouro em vez do pacote.",
+                        items: [],
+                        gp: 50,
+                      }]
+                    : []),
                 ].map((entry) => (
                   <button
                     key={entry.id}
@@ -7596,7 +7991,7 @@ export default function HomePage() {
                     {feat.ruleset === "2024" ? "NEW 2024" : "OLD 2014"}
                   </span>
                   <strong>{featDisplayName(feat)}</strong>
-                  <small>{feat.prerequisite || "Sem pré-requisito"}</small>
+                  <small>{featDisplayPrerequisite(feat)}</small>
                 </button>
               ))}
             </div>
@@ -9720,13 +10115,17 @@ export default function HomePage() {
       <div className="page-title">
         <div>
           <span className="eyebrow">Catálogo OLD e NEW</span>
-          <h1>Talentos, sem misturar versões.</h1>
+          <h1>Talentos, com a edição sempre evidente.</h1>
           <p>
             {allFeats.filter((feat) => feat.ruleset === "2024").length} opções
             NEW de 2024 e{" "}
             {allFeats.filter((feat) => feat.ruleset === "2014").length} opções
             OLD de 2014, com fonte, categoria e pré-requisitos visíveis.
           </p>
+          <small className="translation-note">
+            Nomes publicados em português são priorizados. O nome original em
+            inglês permanece indexado, então as duas pesquisas funcionam.
+          </small>
         </div>
       </div>
       <div className="feat-toolbar">
@@ -9764,8 +10163,9 @@ export default function HomePage() {
           <span className="eyebrow">Talentos</span>
           <strong>{visibleFeats.length} resultados</strong>
           <p>
-            Clique em uma opção para ler. O botão + registra o talento na ficha
-            sem apagar escolhas de outra edição.
+            O talento do antecedente e o extra do Humano são aplicados no
+            Criador. O botão + desta biblioteca é uma inclusão manual e deve ser
+            confirmada com o mestre.
           </p>
         </aside>
         <div className="feat-grid">
@@ -9792,28 +10192,24 @@ export default function HomePage() {
                     </small>
                   )}
                   <small>
-                    {feat.source} · {feat.category}
+                    {feat.source} · {featDisplayCategory(feat)}
                   </small>
-                  <p>{feat.summary}</p>
-                  <em>{feat.prerequisite.trim() || "Sem pré-requisito"}</em>
+                  <p>{featDisplaySummary(feat)}</p>
+                  <em>{featDisplayPrerequisite(feat)}</em>
                 </button>
                 <button
                   className={`feat-add ${selected ? "selected" : ""}`}
+                  disabled={
+                    character.editionPolicy === "locked" &&
+                    Boolean(character.lockedRuleset) &&
+                    character.lockedRuleset !== feat.ruleset
+                  }
                   aria-label={
                     selected
                       ? `Remover ${featDisplayName(feat)}`
                       : `Adicionar ${featDisplayName(feat)}`
                   }
-                  onClick={() =>
-                    updateCharacter(
-                      "selectedFeatIds",
-                      selected
-                        ? character.selectedFeatIds.filter(
-                            (id) => id !== feat.id,
-                          )
-                        : [...character.selectedFeatIds, feat.id],
-                    )
-                  }
+                  onClick={() => toggleFeatSelection(feat)}
                 >
                   {selected ? <Check size={16} /> : <Plus size={16} />}
                 </button>
@@ -9822,6 +10218,184 @@ export default function HomePage() {
           })}
         </div>
       </div>
+    </div>
+  );
+
+  const renderMaster = () => {
+    if (!masterUnlocked)
+      return (
+        <div className="view-enter master-gate">
+          <div className="master-gate-mark"><Crown size={34} /></div>
+          <span className="eyebrow">Ferramentas de campanha</span>
+          <h1>Você está entrando na Central do Mestre.</h1>
+          <p>
+            Esta área guarda fichas importadas dos jogadores, resumos de
+            consulta rápida e NPCs da campanha somente neste dispositivo.
+          </p>
+          <button className="primary-button" onClick={() => setMasterUnlocked(true)}>
+            Sou o mestre <ChevronRight size={17} />
+          </button>
+          <small>Não é uma autenticação: é apenas uma separação de interface.</small>
+        </div>
+      );
+
+    return (
+      <div className="view-enter master-view">
+        <div className="page-title">
+          <div>
+            <span className="eyebrow">Central do Mestre</span>
+            <h1>A mesa inteira, sem abrir cinco fichas.</h1>
+            <p>
+              Importe os arquivos exportados pelos jogadores e consulte PV,
+              CA, percepção, classe, magias e observações essenciais.
+            </p>
+          </div>
+          <button className="primary-button" onClick={() => masterImportInput.current?.click()}>
+            <FileUp size={17} /> Importar fichas
+          </button>
+          <input ref={masterImportInput} type="file" accept="application/json,.json" multiple hidden onChange={importCharacterForMaster} />
+        </div>
+
+        <section className="master-section">
+          <div className="module-head">
+            <div><span className="eyebrow">Jogadores</span><h2>Painel rápido da equipe</h2></div>
+            <span className="count-chip">{masterCharacters.length} fichas</span>
+          </div>
+          {masterCharacters.length ? (
+            <div className="master-character-grid">
+              {masterCharacters.map((bundle, index) => {
+                const snapshot = bundle.character;
+                const classLabel = characterSummary(snapshot) || "Construção incompleta";
+                const stats = quickStatsFor(snapshot);
+                return (
+                  <article className="master-character-card" key={`${bundle.fileName}-${index}`}>
+                    <div className="master-portrait">
+                      {snapshot.portrait ? <img src={snapshot.portrait} alt="" /> : <UserRound size={28} />}
+                    </div>
+                    <div className="master-character-copy">
+                      <span>NÍVEL {snapshot.level} · {snapshot.speciesRuleset}/{snapshot.classRuleset}</span>
+                      <h3>{snapshot.name || "Personagem sem nome"}</h3>
+                      <p>{classLabel}</p>
+                      <div className="master-stat-row">
+                        <span><Heart size={14} /> PV {stats.currentHitPoints}/{stats.maximumHitPoints}</span>
+                        <span><Shield size={14} /> CA {stats.armorClass}</span>
+                        <span><Eye size={14} /> PP {stats.passivePerception}</span>
+                      </div>
+                    </div>
+                    <div className="master-card-actions">
+                      <button onClick={() => setActiveMasterCharacter(bundle)}>Resumo</button>
+                      <button onClick={() => {
+                        setCharacter(bundle.character);
+                        setCustomSpells(bundle.customSpells);
+                        setBoards(bundle.boards);
+                        setActiveBoardId(bundle.activeBoardId);
+                        navigate("ficha");
+                      }}>Abrir ficha inteira</button>
+                      <button className="danger-icon" aria-label="Remover ficha" onClick={() => setMasterCharacters((current) => current.filter((_, currentIndex) => currentIndex !== index))}><Trash2 size={15} /></button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="master-empty"><FileUp size={25} /><strong>Nenhuma ficha importada</strong><p>Peça aos jogadores o arquivo JSON exportado pelo Arcana.</p></div>
+          )}
+        </section>
+
+        <section className="master-section npc-workshop">
+          <div className="module-head">
+            <div><span className="eyebrow">Oficina de NPCs</span><h2>Prepare alguém em segundos.</h2><p>A geração cria um bloco rápido de mesa, não uma ficha de jogador excessivamente detalhada.</p></div>
+            <div className="npc-generator-controls">
+              <label>Nível <input type="number" min={1} max={20} value={npcLevel} onChange={(event) => setNpcLevel(Math.max(1, Math.min(20, Number(event.target.value))))} /></label>
+              <label>Edição <select value={npcRuleset} onChange={(event) => setNpcRuleset(event.target.value as Ruleset)}><option value="2024">NEW 2024</option><option value="2014">LEGACY 2014</option></select></label>
+              <button className="primary-button" onClick={() => setMasterNpcs((current) => [generateNpc(npcLevel, npcRuleset), ...current])}><Sparkles size={16} /> Gerar NPC</button>
+              <input ref={npcPortraitInput} type="file" accept="image/*" hidden onChange={handleNpcPortraitUpload} />
+            </div>
+          </div>
+          <div className="npc-grid">
+            {masterNpcs.map((npc) => (
+              <article key={npc.id}>
+                <div className="npc-head">
+                  <button className="npc-portrait-button" title="Adicionar ou trocar retrato" onClick={() => { setNpcPortraitTarget(npc.id); window.setTimeout(() => npcPortraitInput.current?.click(), 0); }}>{npc.portrait ? <img src={npc.portrait} alt="" /> : <ImagePlus size={20} />}</button>
+                  <span>{npc.difficulty}<small>{npc.ruleset}</small></span>
+                  <button onClick={() => setMasterNpcs((current) => current.filter((entry) => entry.id !== npc.id))}><Trash2 size={14} /></button>
+                </div>
+                <input className="npc-name" value={npc.name} onChange={(event) => setMasterNpcs((current) => current.map((entry) => entry.id === npc.id ? { ...entry, name: event.target.value } : entry))} />
+                <p>{npc.species} · {npc.className} {npc.level}</p>
+                <strong>{npc.role}</strong>
+                <div className="master-stat-row"><span>CA {npc.armorClass}</span><span>PV {npc.hitPoints}</span><span>Ataque +{npc.attackBonus ?? proficiency(npc.level) + 3}</span>{npc.saveDc && <span>CD {npc.saveDc}</span>}</div>
+                <textarea value={npc.note} onChange={(event) => setMasterNpcs((current) => current.map((entry) => entry.id === npc.id ? { ...entry, note: event.target.value } : entry))} />
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
+    );
+  };
+
+  const arenaCharacter = arenaCharacterKey === "current"
+    ? character
+    : masterCharacters[Number(arenaCharacterKey)]?.character ?? character;
+  const arenaClassId = arenaCharacter.classId;
+  const arenaMaxHp = Math.max(12, arenaCharacter.level * 8 + Math.max(0, arenaCharacter.abilities.con - 10));
+  const arenaBonuses = arenaRewards
+    .filter((reward) => arenaRewardIds.includes(reward.id))
+    .reduce((total, reward) => ({ attack: total.attack + reward.attack, armor: total.armor + reward.armor }), { attack: 0, armor: 0 });
+  const arenaClassRewards = arenaRewards.filter(
+    (reward) =>
+      !arenaRewardIds.includes(reward.id) &&
+      reward.classes.includes(arenaClassId),
+  );
+  const startArena = () => {
+    setArenaStage(0); setArenaNode(0); setArenaHp(arenaMaxHp); setArenaRewardIds([]); setArenaRewardChoices([]);
+    setArenaLog([`${arenaCharacter.name || "O aventureiro"} entrou na Cripta da Fome.`]);
+  };
+  const advanceArena = () => {
+    if (arenaHp <= 0 || arenaRewardChoices.length) return;
+    const isBoss = arenaNode === 3;
+    const stage = arenaStages[arenaStage];
+    const attack = 4 + arenaCharacter.level + arenaBonuses.attack + Math.floor(Math.random() * 8);
+    const enemy = 5 + arenaStage * 3 + arenaNode * 2 + (isBoss ? 5 : 0) + Math.floor(Math.random() * 8);
+    const damage = attack >= enemy ? Math.max(0, Math.floor(Math.random() * 5) - arenaBonuses.armor) : Math.max(2, enemy - attack + 3 - arenaBonuses.armor);
+    const nextHp = Math.max(0, arenaHp - damage);
+    setArenaHp(nextHp);
+    setArenaLog((current) => [`${isBoss ? stage.boss : "Encontro"}: ${attack >= enemy ? "vitória" : "golpe sofrido"}${damage ? ` · −${damage} PV` : " · ileso"}.`, ...current].slice(0, 8));
+    if (nextHp <= 0) return;
+    if (isBoss) {
+      const compatible = arenaRewards.filter((reward) => !arenaRewardIds.includes(reward.id) && (!reward.classes.length || reward.classes.includes(arenaClassId)));
+      const classReward = arenaClassRewards.sort(() => Math.random() - .5)[0];
+      const remaining = compatible
+        .filter((reward) => reward.id !== classReward?.id)
+        .sort(() => Math.random() - .5)
+        .slice(0, classReward ? 2 : 3);
+      setArenaRewardChoices(classReward ? [classReward, ...remaining] : remaining);
+    } else setArenaNode((current) => current + 1);
+  };
+  const chooseArenaReward = (reward: (typeof arenaRewards)[number]) => {
+    setArenaRewardIds((current) => [...current, reward.id]);
+    setArenaHp((current) => Math.min(arenaMaxHp, current + reward.healing));
+    setArenaRewardChoices([]);
+    if (arenaStage < arenaStages.length - 1) { setArenaStage((current) => current + 1); setArenaNode(0); }
+    else setArenaStage(arenaStages.length);
+  };
+  const renderArena = () => (
+    <div className="view-enter arena-view">
+      <div className="page-title"><div><span className="eyebrow">Intervalo da sessão</span><h1>Arena do Intervalo</h1><p>Um roguelike curto de quatro atos. Ele usa nível e classe da ficha, mas não altera nenhum dado real do personagem.</p></div></div>
+      <section className="arena-console">
+        <div className="arena-select">
+          <label>Herói <select value={arenaCharacterKey} onChange={(event) => setArenaCharacterKey(event.target.value)}><option value="current">Ficha aberta · {character.name || "Sem nome"}</option>{masterCharacters.map((entry, index) => <option value={String(index)} key={index}>Mestre · {entry.character.name || entry.fileName}</option>)}</select></label>
+          <button className="primary-button" onClick={startArena}>{arenaLog.length ? "Recomeçar expedição" : "Entrar na arena"}</button>
+        </div>
+        {arenaLog.length > 0 && arenaStage < arenaStages.length ? (
+          <div className="arena-shell">
+            <div className="arena-hero"><div className="arena-token">{arenaCharacter.portrait ? <img src={arenaCharacter.portrait} alt="" /> : <span>{(arenaCharacter.name || "A")[0]}</span>}</div><div><span>{arenaCharacter.name || "Aventureiro"} · nível {arenaCharacter.level}</span><strong>{arenaHp}/{arenaMaxHp} PV</strong><div className="arena-hp"><i style={{ width: `${arenaHp / arenaMaxHp * 100}%` }} /></div></div></div>
+            <div className="arena-route">{arenaStages.map((stage, index) => <div className={index < arenaStage ? "done" : index === arenaStage ? "active" : ""} key={stage.name}><span>{index + 1}</span><small>{stage.name}</small></div>)}</div>
+            <div className={`arena-encounter ${arenaStages[arenaStage].color}`}><span>{arenaNode === 3 ? "CHEFE" : `SALA ${arenaNode + 1}/3`}</span><h2>{arenaNode === 3 ? arenaStages[arenaStage].boss : ["Emboscada", "Provação", "Guardião"][arenaNode]}</h2><p>{arenaNode === 3 ? "O caminho fecha atrás de você. O próximo golpe decide o ato." : "Um encontro rápido bloqueia o avanço até o chefe."}</p><button onClick={advanceArena}><Swords size={17} /> Resolver confronto</button></div>
+            {arenaRewardChoices.length > 0 && <div className="arena-rewards"><span className="eyebrow">Escolha uma recompensa</span><h3>Somente itens coerentes com sua classe aparecem.</h3><div>{arenaRewardChoices.map((reward) => <button key={reward.id} onClick={() => chooseArenaReward(reward)}><Sparkles size={18} /><strong>{reward.name}</strong><p>{reward.description}</p></button>)}</div></div>}
+            <aside className="arena-log">{arenaLog.map((entry, index) => <p key={`${entry}-${index}`}>{entry}</p>)}</aside>
+          </div>
+        ) : arenaStage >= arenaStages.length ? <div className="arena-victory"><Crown size={32} /><h2>Expedição concluída.</h2><p>Você venceu os quatro atos com {arenaHp} PV restantes.</p><button onClick={startArena}>Jogar novamente</button></div> : <div className="arena-empty"><Gamepad2 size={28} /><strong>Escolha uma ficha e comece.</strong></div>}
+      </section>
     </div>
   );
 
@@ -10262,6 +10836,10 @@ export default function HomePage() {
         return renderLibrary();
       case "regras":
         return renderRules();
+      case "mestre":
+        return renderMaster();
+      case "arena":
+        return renderArena();
       default:
         return renderDashboard();
     }
@@ -10288,6 +10866,19 @@ export default function HomePage() {
         </button>
         <nav>
           {navItems.map(({ id, label, icon: Icon }) => (
+            <button
+              key={id}
+              className={section === id ? "active" : ""}
+              onClick={() => navigate(id)}
+            >
+              <Icon size={19} />
+              <span>{label}</span>
+              {section === id && <i />}
+            </button>
+          ))}
+        </nav>
+        <nav className="sidebar-special" aria-label="Ferramentas extras">
+          {masterNavItems.map(({ id, label, icon: Icon }) => (
             <button
               key={id}
               className={section === id ? "active" : ""}
@@ -10331,7 +10922,9 @@ export default function HomePage() {
             <span>Arcana</span>
             <ChevronRight size={13} />
             <strong>
-              {navItems.find((item) => item.id === section)?.label}
+              {[...navItems, ...masterNavItems].find(
+                (item) => item.id === section,
+              )?.label}
             </strong>
           </div>
           <div className="top-actions">
@@ -10720,11 +11313,11 @@ export default function HomePage() {
             <div className="feat-modal-meta">
               <div>
                 <span>Categoria</span>
-                <strong>{activeFeat.category || "Geral"}</strong>
+                <strong>{featDisplayCategory(activeFeat)}</strong>
               </div>
               <div>
                 <span>Pré-requisito</span>
-                <strong>{activeFeat.prerequisite || "Nenhum"}</strong>
+                <strong>{featDisplayPrerequisite(activeFeat)}</strong>
               </div>
               <div>
                 <span>Fonte</span>
@@ -10733,7 +11326,7 @@ export default function HomePage() {
             </div>
             <div className="feature-explanation">
               <span>Como funciona</span>
-              <p>{activeFeat.summary}</p>
+              <p>{featDisplaySummary(activeFeat)}</p>
             </div>
             <p className="edition-safety-copy">
               {activeFeat.ruleset === "2014"
@@ -10742,16 +11335,12 @@ export default function HomePage() {
             </p>
             <button
               className={`primary-button wide ${character.selectedFeatIds.includes(activeFeat.id) ? "selected" : ""}`}
-              onClick={() =>
-                updateCharacter(
-                  "selectedFeatIds",
-                  character.selectedFeatIds.includes(activeFeat.id)
-                    ? character.selectedFeatIds.filter(
-                        (id) => id !== activeFeat.id,
-                      )
-                    : [...character.selectedFeatIds, activeFeat.id],
-                )
+              disabled={
+                character.editionPolicy === "locked" &&
+                Boolean(character.lockedRuleset) &&
+                character.lockedRuleset !== activeFeat.ruleset
               }
+              onClick={() => toggleFeatSelection(activeFeat)}
             >
               {character.selectedFeatIds.includes(activeFeat.id) ? (
                 <>
@@ -10765,6 +11354,30 @@ export default function HomePage() {
                 </>
               )}
             </button>
+          </article>
+        </div>
+      )}
+
+      {activeMasterCharacter && (
+        <div className="modal-layer" onMouseDown={() => setActiveMasterCharacter(null)}>
+          <article className="modal master-summary-modal" onMouseDown={(event) => event.stopPropagation()}>
+            <button className="modal-close" onClick={() => setActiveMasterCharacter(null)}><X /></button>
+            <span className="eyebrow"><Crown size={14} /> Resumo para o mestre</span>
+            <h2>{activeMasterCharacter.character.name || "Personagem sem nome"}</h2>
+            <p className="lead">{characterSummary(activeMasterCharacter.character)} · nível {activeMasterCharacter.character.level}</p>
+            <div className="master-summary-grid">
+              <div><span>Jogador</span><strong>{activeMasterCharacter.character.player || "Não informado"}</strong></div>
+              <div><span>Tendência</span><strong>{activeMasterCharacter.character.alignment}</strong></div>
+              <div><span>Idiomas</span><strong>{activeMasterCharacter.character.languages.filter(Boolean).join(", ") || "Não registrados"}</strong></div>
+              <div><span>Magias</span><strong>{activeMasterCharacter.character.selectedSpellIds.length}</strong></div>
+              <div><span>Talentos manuais</span><strong>{activeMasterCharacter.character.selectedFeatIds.length}</strong></div>
+              <div><span>Condições/efeitos</span><strong>{activeMasterCharacter.character.effects.length}</strong></div>
+            </div>
+            <section className="master-private-note"><span>Notas da ficha</span><p>{activeMasterCharacter.character.notes || "Nenhuma anotação rápida."}</p></section>
+            <button className="primary-button wide" onClick={() => {
+              const bundle = activeMasterCharacter;
+              setCharacter(bundle.character); setCustomSpells(bundle.customSpells); setBoards(bundle.boards); setActiveBoardId(bundle.activeBoardId); setActiveMasterCharacter(null); navigate("ficha");
+            }}>Abrir ficha inteira</button>
           </article>
         </div>
       )}
