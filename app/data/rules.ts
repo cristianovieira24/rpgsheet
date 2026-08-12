@@ -10,6 +10,7 @@ export const abilities: Array<{ key: AbilityKey; short: string; name: string }> 
 ];
 
 export const classes = [
+  { id: "custom", name: "Classe personalizada", die: 8, primary: "Definido pelo jogador", saves: ["str", "dex"], spellAbility: null, summary: "Construa Dados de Vida, salvaguardas, perícias, conjuração e habilidades por nível.", tags: ["Personalizada", "Editável"] },
   { id: "barbarian", name: "Bárbaro", die: 12, primary: "Força", saves: ["str", "con"], spellAbility: null, summary: "Resistência brutal, fúria e presença na linha de frente.", tags: ["Corpo a corpo", "Resistente"] },
   { id: "bard", name: "Bardo", die: 8, primary: "Carisma", saves: ["dex", "cha"], spellAbility: "cha", summary: "Versatilidade, inspiração, perícias e magia social.", tags: ["Suporte", "Conjuração"] },
   { id: "cleric", name: "Clérigo", die: 8, primary: "Sabedoria", saves: ["wis", "cha"], spellAbility: "wis", summary: "Poder divino, proteção e acesso flexível a milagres.", tags: ["Cura", "Conjuração"] },
@@ -25,6 +26,7 @@ export const classes = [
 ] as const;
 
 export const species = [
+  { id: "custom", name: "Espécie personalizada", size: "Pequeno ou Médio", speed: 9, source: "Criação própria", summary: "Defina tamanho, deslocamento, idiomas, perícias e características com o mestre.", traits: ["Características personalizadas"] },
   { id: "aasimar", name: "Aasimar", size: "Pequeno ou Médio", speed: 9, source: "Livro do Jogador 2024", summary: "Uma centelha dos Planos Superiores concede cura, resistência celestial e uma revelação sobrenatural.", traits: ["Resistência Celestial", "Visão no Escuro", "Mãos Curativas", "Portador da Luz", "Revelação Celestial no nível 3"] },
   { id: "dragonborn", name: "Draconato", size: "Médio", speed: 9, source: "SRD 5.2.1", summary: "Ancestralidade dracônica, sopro elemental, resistência e voo temporário.", traits: ["Ancestralidade Dracônica", "Sopro de Dragão", "Resistência a dano", "Visão no Escuro", "Voo Dracônico no nível 5"] },
   { id: "dwarf", name: "Anão", size: "Médio", speed: 9, source: "SRD 5.2.1", summary: "A espécie de 2024 reúne todos os anões em um único conjunto de traços, sem sub-raças.", traits: ["Visão no Escuro 36 m", "Resiliência Anã", "Tenacidade Anã", "Conhecimento da Pedra"] },
