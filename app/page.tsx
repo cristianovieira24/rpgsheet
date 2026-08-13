@@ -15,6 +15,7 @@ import {
   Download,
   Eye,
   FileUp,
+  FastForward,
   FolderPlus,
   Gamepad2,
   Heart,
@@ -26,7 +27,9 @@ import {
   Minus,
   Network,
   Palette,
+  Pause,
   Pencil,
+  Play,
   Plus,
   RotateCcw,
   Save,
@@ -122,9 +125,11 @@ import {
   type CustomSpeciesState,
 } from "./data/custom";
 import {
+  arenaEncounters,
   arenaRewards,
   arenaStages,
   generateNpc,
+  type ArenaEventChoice,
   type MasterNpc,
 } from "./data/master";
 import {
@@ -133,6 +138,7 @@ import {
   featNamesPt,
   featPrerequisitePt,
 } from "./data/feat-localization";
+import { BossRush, type BossRushCharacter } from "./components/BossRush";
 
 type Section =
   | "inicio"
@@ -149,6 +155,16 @@ type Section =
   | "regras"
   | "mestre"
   | "arena";
+
+type ArenaPhase =
+  | "idle"
+  | "walking"
+  | "fighting"
+  | "event"
+  | "cleared"
+  | "reward"
+  | "defeat"
+  | "victory";
 type Theme =
   | "medieval"
   | "highfantasy"
@@ -679,7 +695,7 @@ const navItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
 
 const masterNavItems: Array<{ id: Section; label: string; icon: typeof Home }> = [
   { id: "mestre", label: "Mestre", icon: Crown },
-  { id: "arena", label: "Arena", icon: Gamepad2 },
+  { id: "arena", label: "Boss Rush", icon: Gamepad2 },
 ];
 
 const schoolPt: Record<string, string> = {
@@ -1604,6 +1620,14 @@ export default function HomePage() {
   const [arenaLog, setArenaLog] = useState<string[]>([]);
   const [arenaRewardIds, setArenaRewardIds] = useState<string[]>([]);
   const [arenaRewardChoices, setArenaRewardChoices] = useState<typeof arenaRewards>([]);
+  const [arenaPhase, setArenaPhase] = useState<ArenaPhase>("idle");
+  const [arenaEnemyHp, setArenaEnemyHp] = useState(0);
+  const [arenaRound, setArenaRound] = useState(0);
+  const [arenaPaused, setArenaPaused] = useState(false);
+  const [arenaSpeed, setArenaSpeed] = useState<1 | 2>(1);
+  const [arenaFloats, setArenaFloats] = useState<Array<{ id: string; side: "hero" | "enemy"; text: string; kind: "damage" | "heal" }>>([]);
+  const [arenaEventBonuses, setArenaEventBonuses] = useState({ attack: 0, armor: 0 });
+  const arenaFloatCounter = useRef(0);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
@@ -10338,64 +10362,231 @@ export default function HomePage() {
     : masterCharacters[Number(arenaCharacterKey)]?.character ?? character;
   const arenaClassId = arenaCharacter.classId;
   const arenaMaxHp = Math.max(12, arenaCharacter.level * 8 + Math.max(0, arenaCharacter.abilities.con - 10));
+  const arenaEncounter = arenaEncounters[arenaStage]?.[arenaNode];
+  const arenaEnemyMaxHp = arenaEncounter
+    ? arenaEncounter.hitPoints + Math.max(0, arenaCharacter.level - 1) * 2 + arenaStage * 3
+    : 1;
   const arenaBonuses = arenaRewards
     .filter((reward) => arenaRewardIds.includes(reward.id))
-    .reduce((total, reward) => ({ attack: total.attack + reward.attack, armor: total.armor + reward.armor }), { attack: 0, armor: 0 });
+    .reduce(
+      (total, reward) => ({
+        attack: total.attack + reward.attack,
+        armor: total.armor + reward.armor,
+      }),
+      { attack: 0, armor: 0 },
+    );
+  const arenaTotalBonuses = {
+    attack: arenaBonuses.attack + arenaEventBonuses.attack,
+    armor: arenaBonuses.armor + arenaEventBonuses.armor,
+  };
   const arenaClassRewards = arenaRewards.filter(
     (reward) =>
       !arenaRewardIds.includes(reward.id) &&
       reward.classes.includes(arenaClassId),
   );
-  const startArena = () => {
-    setArenaStage(0); setArenaNode(0); setArenaHp(arenaMaxHp); setArenaRewardIds([]); setArenaRewardChoices([]);
-    setArenaLog([`${arenaCharacter.name || "O aventureiro"} entrou na Cripta da Fome.`]);
+  const pushArenaFloat = (
+    side: "hero" | "enemy",
+    text: string,
+    kind: "damage" | "heal" = "damage",
+  ) => {
+    arenaFloatCounter.current += 1;
+    const id = `arena-float-${arenaFloatCounter.current}`;
+    setArenaFloats((current) => [...current, { id, side, text, kind }]);
+    window.setTimeout(
+      () => setArenaFloats((current) => current.filter((entry) => entry.id !== id)),
+      900,
+    );
   };
-  const advanceArena = () => {
-    if (arenaHp <= 0 || arenaRewardChoices.length) return;
-    const isBoss = arenaNode === 3;
-    const stage = arenaStages[arenaStage];
-    const attack = 4 + arenaCharacter.level + arenaBonuses.attack + Math.floor(Math.random() * 8);
-    const enemy = 5 + arenaStage * 3 + arenaNode * 2 + (isBoss ? 5 : 0) + Math.floor(Math.random() * 8);
-    const damage = attack >= enemy ? Math.max(0, Math.floor(Math.random() * 5) - arenaBonuses.armor) : Math.max(2, enemy - attack + 3 - arenaBonuses.armor);
-    const nextHp = Math.max(0, arenaHp - damage);
-    setArenaHp(nextHp);
-    setArenaLog((current) => [`${isBoss ? stage.boss : "Encontro"}: ${attack >= enemy ? "vitória" : "golpe sofrido"}${damage ? ` · −${damage} PV` : " · ileso"}.`, ...current].slice(0, 8));
-    if (nextHp <= 0) return;
-    if (isBoss) {
-      const compatible = arenaRewards.filter((reward) => !arenaRewardIds.includes(reward.id) && (!reward.classes.length || reward.classes.includes(arenaClassId)));
-      const classReward = arenaClassRewards.sort(() => Math.random() - .5)[0];
-      const remaining = compatible
-        .filter((reward) => reward.id !== classReward?.id)
-        .sort(() => Math.random() - .5)
-        .slice(0, classReward ? 2 : 3);
-      setArenaRewardChoices(classReward ? [classReward, ...remaining] : remaining);
-    } else setArenaNode((current) => current + 1);
+  const prepareArenaEncounter = (stage: number, node: number) => {
+    const encounter = arenaEncounters[stage]?.[node];
+    if (!encounter) return;
+    setArenaEnemyHp(
+      encounter.hitPoints + Math.max(0, arenaCharacter.level - 1) * 2 + stage * 3,
+    );
+    setArenaRound(0);
+    setArenaPhase("walking");
+  };
+  const startArena = () => {
+    setArenaStage(0);
+    setArenaNode(0);
+    setArenaHp(arenaMaxHp);
+    setArenaRewardIds([]);
+    setArenaRewardChoices([]);
+    setArenaEventBonuses({ attack: 0, armor: 0 });
+    setArenaPaused(false);
+    setArenaFloats([]);
+    setArenaLog([
+      `${arenaCharacter.name || "O aventureiro"} cruzou o limiar da Cripta da Fome.`,
+    ]);
+    setArenaEnemyHp(
+      arenaEncounters[0][0].hitPoints + Math.max(0, arenaCharacter.level - 1) * 2,
+    );
+    setArenaRound(0);
+    setArenaPhase("walking");
+  };
+  const chooseArenaEvent = (choice: ArenaEventChoice) => {
+    if (choice.healing) {
+      const healing = Math.max(1, Math.round((arenaMaxHp * choice.healing) / 100));
+      setArenaHp((current) => Math.min(arenaMaxHp, current + healing));
+      pushArenaFloat("hero", `+${healing}`, "heal");
+    }
+    setArenaEventBonuses((current) => ({
+      attack: current.attack + (choice.attack ?? 0),
+      armor: current.armor + (choice.armor ?? 0),
+    }));
+    setArenaLog((current) => [choice.result, ...current].slice(0, 8));
+    setArenaPhase("cleared");
   };
   const chooseArenaReward = (reward: (typeof arenaRewards)[number]) => {
     setArenaRewardIds((current) => [...current, reward.id]);
     setArenaHp((current) => Math.min(arenaMaxHp, current + reward.healing));
     setArenaRewardChoices([]);
-    if (arenaStage < arenaStages.length - 1) { setArenaStage((current) => current + 1); setArenaNode(0); }
-    else setArenaStage(arenaStages.length);
+    setArenaLog((current) => [`Recompensa escolhida: ${reward.name}.`, ...current].slice(0, 8));
+    if (arenaStage < arenaStages.length - 1) {
+      const nextStage = arenaStage + 1;
+      setArenaStage(nextStage);
+      setArenaNode(0);
+      prepareArenaEncounter(nextStage, 0);
+    } else {
+      setArenaStage(arenaStages.length);
+      setArenaPhase("victory");
+    }
   };
+
+  useEffect(() => {
+    if (arenaPhase !== "walking" || arenaPaused || !arenaEncounter) return;
+    const timer = window.setTimeout(
+      () => setArenaPhase(arenaEncounter.kind === "event" ? "event" : "fighting"),
+      1350 / arenaSpeed,
+    );
+    return () => window.clearTimeout(timer);
+  }, [arenaEncounter, arenaPaused, arenaPhase, arenaSpeed]);
+
+  useEffect(() => {
+    if (arenaPhase !== "fighting" || arenaPaused) return;
+    const timer = window.setInterval(
+      () => setArenaRound((current) => current + 1),
+      920 / arenaSpeed,
+    );
+    return () => window.clearInterval(timer);
+  }, [arenaPaused, arenaPhase, arenaSpeed]);
+
+  useEffect(() => {
+    if (arenaPhase !== "fighting" || arenaRound < 1 || !arenaEncounter) return;
+    const abilityModifier = Math.max(
+      0,
+      Math.floor(
+        (Math.max(
+          arenaCharacter.abilities.str,
+          arenaCharacter.abilities.dex,
+          arenaCharacter.abilities.int,
+          arenaCharacter.abilities.wis,
+          arenaCharacter.abilities.cha,
+        ) -
+          10) /
+          2,
+      ),
+    );
+    const heroDamage = Math.max(
+      2,
+      3 +
+        Math.ceil(arenaCharacter.level / 2) +
+        abilityModifier +
+        arenaTotalBonuses.attack +
+        ((arenaRound * 7 + arenaStage * 3 + arenaNode) % 5) -
+        arenaEncounter.defense,
+    );
+    const nextEnemyHp = Math.max(0, arenaEnemyHp - heroDamage);
+    // O relógio da Arena atualiza o quadro de combate a cada rodada.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setArenaEnemyHp(nextEnemyHp);
+    pushArenaFloat("enemy", `−${heroDamage}`);
+
+    if (nextEnemyHp <= 0) {
+      setArenaLog((current) => [
+        `${arenaEncounter.name} caiu após ${arenaRound} ${arenaRound === 1 ? "troca" : "trocas"}.`,
+        ...current,
+      ].slice(0, 8));
+      setArenaPhase("cleared");
+      return;
+    }
+
+    if (arenaRound % 2 === 0) {
+      const dexterityGuard = Math.max(
+        0,
+        Math.floor((arenaCharacter.abilities.dex - 10) / 2),
+      );
+      const incoming = Math.max(
+        1,
+        arenaEncounter.attack +
+          ((arenaRound * 5 + arenaStage + arenaNode) % 4) -
+          Math.floor(dexterityGuard / 2) -
+          arenaTotalBonuses.armor,
+      );
+      const nextHeroHp = Math.max(0, arenaHp - incoming);
+      setArenaHp(nextHeroHp);
+      pushArenaFloat("hero", `−${incoming}`);
+      if (nextHeroHp <= 0) {
+        setArenaLog((current) => [
+          `${arenaEncounter.name} encerrou a expedição.`,
+          ...current,
+        ].slice(0, 8));
+        setArenaPhase("defeat");
+      }
+    }
+  // A rodada é o relógio intencional do combate automático.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arenaRound]);
+
+  useEffect(() => {
+    if (arenaPhase !== "cleared") return;
+    const timer = window.setTimeout(() => {
+      const encounters = arenaEncounters[arenaStage] ?? [];
+      if (arenaNode < encounters.length - 1) {
+        const nextNode = arenaNode + 1;
+        setArenaNode(nextNode);
+        prepareArenaEncounter(arenaStage, nextNode);
+        return;
+      }
+      const compatible = arenaRewards.filter(
+        (reward) =>
+          !arenaRewardIds.includes(reward.id) &&
+          (!reward.classes.length || reward.classes.includes(arenaClassId)),
+      );
+      const classReward = arenaClassRewards
+        .filter((reward) => !arenaRewardIds.includes(reward.id))
+        .sort(() => Math.random() - 0.5)[0];
+      const remaining = compatible
+        .filter((reward) => reward.id !== classReward?.id)
+        .sort(() => Math.random() - 0.5)
+        .slice(0, classReward ? 2 : 3);
+      setArenaRewardChoices(classReward ? [classReward, ...remaining] : remaining);
+      setArenaPhase("reward");
+    }, 1050 / arenaSpeed);
+    return () => window.clearTimeout(timer);
+  // A conclusão avança um único nó por vez.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [arenaPhase]);
+
+  const arenaPhaseLabel: Record<ArenaPhase, string> = {
+    idle: "Aguardando herói",
+    walking: "Avançando pelo caminho",
+    fighting: arenaPaused ? "Combate pausado" : "Combate automático",
+    event: "Uma decisão interrompe o caminho",
+    cleared: "Caminho livre",
+    reward: "Vitória do ato",
+    defeat: "Expedição encerrada",
+    victory: "Expedição concluída",
+  };
+
+  const bossRushCharacters: BossRushCharacter[] = [
+    { key: "current", name: character.name || "Sem nome", classId: character.classId, className: classNameFor(character.classId), level: character.level, abilities: character.abilities, currentHp: quickStatsFor(character).currentHitPoints, maximumHp: quickStatsFor(character).maximumHitPoints, armorClass: quickStatsFor(character).armorClass, portrait: character.portrait },
+    ...masterCharacters.map((entry, index) => ({ key: String(index), name: entry.character.name || entry.fileName, classId: entry.character.classId, className: classNameFor(entry.character.classId), level: entry.character.level, abilities: entry.character.abilities, currentHp: quickStatsFor(entry.character).currentHitPoints, maximumHp: quickStatsFor(entry.character).maximumHitPoints, armorClass: quickStatsFor(entry.character).armorClass, portrait: entry.character.portrait })),
+  ];
+
   const renderArena = () => (
     <div className="view-enter arena-view">
-      <div className="page-title"><div><span className="eyebrow">Intervalo da sessão</span><h1>Arena do Intervalo</h1><p>Um roguelike curto de quatro atos. Ele usa nível e classe da ficha, mas não altera nenhum dado real do personagem.</p></div></div>
-      <section className="arena-console">
-        <div className="arena-select">
-          <label>Herói <select value={arenaCharacterKey} onChange={(event) => setArenaCharacterKey(event.target.value)}><option value="current">Ficha aberta · {character.name || "Sem nome"}</option>{masterCharacters.map((entry, index) => <option value={String(index)} key={index}>Mestre · {entry.character.name || entry.fileName}</option>)}</select></label>
-          <button className="primary-button" onClick={startArena}>{arenaLog.length ? "Recomeçar expedição" : "Entrar na arena"}</button>
-        </div>
-        {arenaLog.length > 0 && arenaStage < arenaStages.length ? (
-          <div className="arena-shell">
-            <div className="arena-hero"><div className="arena-token">{arenaCharacter.portrait ? <img src={arenaCharacter.portrait} alt="" /> : <span>{(arenaCharacter.name || "A")[0]}</span>}</div><div><span>{arenaCharacter.name || "Aventureiro"} · nível {arenaCharacter.level}</span><strong>{arenaHp}/{arenaMaxHp} PV</strong><div className="arena-hp"><i style={{ width: `${arenaHp / arenaMaxHp * 100}%` }} /></div></div></div>
-            <div className="arena-route">{arenaStages.map((stage, index) => <div className={index < arenaStage ? "done" : index === arenaStage ? "active" : ""} key={stage.name}><span>{index + 1}</span><small>{stage.name}</small></div>)}</div>
-            <div className={`arena-encounter ${arenaStages[arenaStage].color}`}><span>{arenaNode === 3 ? "CHEFE" : `SALA ${arenaNode + 1}/3`}</span><h2>{arenaNode === 3 ? arenaStages[arenaStage].boss : ["Emboscada", "Provação", "Guardião"][arenaNode]}</h2><p>{arenaNode === 3 ? "O caminho fecha atrás de você. O próximo golpe decide o ato." : "Um encontro rápido bloqueia o avanço até o chefe."}</p><button onClick={advanceArena}><Swords size={17} /> Resolver confronto</button></div>
-            {arenaRewardChoices.length > 0 && <div className="arena-rewards"><span className="eyebrow">Escolha uma recompensa</span><h3>Somente itens coerentes com sua classe aparecem.</h3><div>{arenaRewardChoices.map((reward) => <button key={reward.id} onClick={() => chooseArenaReward(reward)}><Sparkles size={18} /><strong>{reward.name}</strong><p>{reward.description}</p></button>)}</div></div>}
-            <aside className="arena-log">{arenaLog.map((entry, index) => <p key={`${entry}-${index}`}>{entry}</p>)}</aside>
-          </div>
-        ) : arenaStage >= arenaStages.length ? <div className="arena-victory"><Crown size={32} /><h2>Expedição concluída.</h2><p>Você venceu os quatro atos com {arenaHp} PV restantes.</p><button onClick={startArena}>Jogar novamente</button></div> : <div className="arena-empty"><Gamepad2 size={28} /><strong>Escolha uma ficha e comece.</strong></div>}
-      </section>
+      <BossRush characters={bossRushCharacters} />
     </div>
   );
 
