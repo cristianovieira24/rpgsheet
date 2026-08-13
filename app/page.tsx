@@ -138,7 +138,7 @@ import {
   featNamesPt,
   featPrerequisitePt,
 } from "./data/feat-localization";
-import { BossRush, type BossRushCharacter } from "./components/BossRush";
+import { BossRush } from "./components/BossRush";
 
 type Section =
   | "inicio"
@@ -10579,14 +10579,14 @@ export default function HomePage() {
     victory: "Expedição concluída",
   };
 
-  const bossRushCharacters: BossRushCharacter[] = [
-    { key: "current", name: character.name || "Sem nome", classId: character.classId, className: classNameFor(character.classId), level: character.level, abilities: character.abilities, currentHp: quickStatsFor(character).currentHitPoints, maximumHp: quickStatsFor(character).maximumHitPoints, armorClass: quickStatsFor(character).armorClass, portrait: character.portrait },
-    ...masterCharacters.map((entry, index) => ({ key: String(index), name: entry.character.name || entry.fileName, classId: entry.character.classId, className: classNameFor(entry.character.classId), level: entry.character.level, abilities: entry.character.abilities, currentHp: quickStatsFor(entry.character).currentHitPoints, maximumHp: quickStatsFor(entry.character).maximumHitPoints, armorClass: quickStatsFor(entry.character).armorClass, portrait: entry.character.portrait })),
-  ];
-
   const renderArena = () => (
     <div className="view-enter arena-view">
-      <BossRush characters={bossRushCharacters} />
+      <BossRush
+        hero={{
+          name: character.name || "Aventureiro",
+          portrait: character.portrait,
+        }}
+      />
     </div>
   );
 
