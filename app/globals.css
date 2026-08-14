@@ -6042,6 +6042,18 @@ h2,
 .advancement-action-row > div > small {
   max-width: 440px;
 }
+.level-adjust-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 9px;
+}
+.level-adjust-buttons button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+}
 
 .multiclass-sheet-button {
   align-self: center;
@@ -7166,6 +7178,9 @@ h2,
     align-items: stretch;
     flex-direction: column;
     text-align: left;
+  }
+  .level-adjust-buttons {
+    justify-content: flex-start;
   }
   .custom-definition-grid,
   .selected-feats-grid {

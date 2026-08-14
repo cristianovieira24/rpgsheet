@@ -128,8 +128,6 @@ import {
 } from "./data/custom";
 import {
   advancementProgress,
-  canAdvanceOneLevel,
-  clampCharacterLevel,
   experienceForLevel,
   experienceToNextLevel,
   levelFromExperience,
@@ -2083,12 +2081,6 @@ export default function HomePage() {
   const nextLevelXp =
     character.level < 20 ? experienceForLevel(character.level + 1) : null;
   const xpLevelUnlocked = levelFromExperience(character.experiencePoints);
-  const levelAdvanceAvailable = canAdvanceOneLevel(
-    character.advancementMode,
-    character.level,
-    character.experiencePoints,
-    character.milestoneGranted,
-  );
   const progression =
     character.classId === "custom"
       ? character.customClass.features.map((feature) => ({
@@ -2617,10 +2609,6 @@ export default function HomePage() {
           ...current,
           level: requested,
           classLevels,
-          experiencePoints:
-            current.advancementMode === "xp"
-              ? experienceForLevel(requested)
-              : current.experiencePoints,
           milestoneGranted: false,
         };
       }
@@ -2723,10 +2711,6 @@ export default function HomePage() {
       return {
         ...current,
         level: target,
-        experiencePoints:
-          current.advancementMode === "xp"
-            ? experienceForLevel(target)
-            : current.experiencePoints,
         milestoneGranted: false,
         classLevels: existing.length
           ? fitClassLevelsToBudget(existing, target)
@@ -2735,18 +2719,11 @@ export default function HomePage() {
     });
   };
 
-  const advanceCharacterOneLevel = (preferredEntryId?: string) => {
+  const adjustCharacterLevel = (
+    delta: -1 | 1,
+    preferredEntryId?: string,
+  ) => {
     setCharacter((current) => {
-      if (
-        !canAdvanceOneLevel(
-          current.advancementMode,
-          current.level,
-          current.experiencePoints,
-          current.milestoneGranted,
-        )
-      )
-        return current;
-
       const existing = current.classLevels.length
         ? current.classLevels
         : current.classId
@@ -2761,13 +2738,21 @@ export default function HomePage() {
               },
             ]
           : [];
-      const targetLevel = clampCharacterLevel(current.level + 1);
+      const minimum = Math.max(1, existing.length);
+      const targetLevel = Math.max(
+        minimum,
+        Math.min(20, current.level + delta),
+      );
+      if (targetLevel === current.level) return current;
+
       const targetEntry =
         existing.find((entry) => entry.id === preferredEntryId) ?? existing[0];
+      if (delta < 0 && targetEntry && targetEntry.level <= 1) return current;
+
       const classLevels = targetEntry
         ? existing.map((entry) =>
             entry.id === targetEntry.id
-              ? { ...entry, level: entry.level + 1 }
+              ? { ...entry, level: entry.level + delta }
               : entry,
           )
         : existing;
@@ -4484,7 +4469,7 @@ export default function HomePage() {
             </div>
             <div className="field-pair">
               <label className="field-label">
-                Nível total inicial
+                Nível total
                 <input
                   type="number"
                   min={Math.max(1, classLevelEntries.length)}
@@ -7274,9 +7259,7 @@ export default function HomePage() {
             <small>
               {character.level >= 20
                 ? "máximo"
-                : levelAdvanceAvailable
-                  ? "avanço disponível"
-                  : "ver progressão"}
+                : "ajustar nível"}
             </small>
           </button>
           <div className="proficiency-control">
@@ -8425,11 +8408,12 @@ export default function HomePage() {
   };
 
   const renderAdvancementPanel = (preferredEntryId?: string) => {
-    const selectedEntryId =
+    const requestedEntryId =
       preferredEntryId || progressionClassEntryId || classLevelEntries[0]?.id;
-    const selectedEntry = classLevelEntries.find(
-      (entry) => entry.id === selectedEntryId,
-    );
+    const selectedEntry =
+      classLevelEntries.find((entry) => entry.id === requestedEntryId) ??
+      classLevelEntries[0];
+    const selectedEntryId = selectedEntry?.id ?? "";
     const xpRemaining = experienceToNextLevel(
       character.level,
       character.experiencePoints,
@@ -8438,116 +8422,69 @@ export default function HomePage() {
       character.level,
       character.experiencePoints,
     );
+    const minimumLevel = Math.max(1, classLevelEntries.length);
+    const canDecreaseLevel =
+      character.level > minimumLevel &&
+      (!selectedEntry || selectedEntry.level > 1);
 
     return (
       <section className="advancement-panel">
         <div className="advancement-heading">
           <div>
-            <span className="eyebrow">Avanço validado</span>
-            <h2>O nível não é um campo livre.</h2>
+            <span className="eyebrow">Nível livre</span>
+            <h2>A ficha acompanha; quem decide é você.</h2>
             <p>
-              Escolha o método da campanha. A ficha só libera o próximo nível
-              quando a condição correspondente for cumprida.
+              Aumente ou diminua o nível quando quiser. O XP continua salvo
+              como referência e nunca bloqueia o ajuste manual.
             </p>
-          </div>
-          <div className="advancement-mode" role="group" aria-label="Método de avanço">
-            <button
-              className={character.advancementMode === "xp" ? "active" : ""}
-              onClick={() =>
-                setCharacter((current) => ({
-                  ...current,
-                  advancementMode: "xp",
-                  experiencePoints: Math.max(
-                    current.experiencePoints,
-                    experienceForLevel(current.level),
-                  ),
-                  milestoneGranted: false,
-                }))
-              }
-            >
-              XP total
-            </button>
-            <button
-              className={
-                character.advancementMode === "milestone" ? "active" : ""
-              }
-              onClick={() =>
-                setCharacter((current) => ({
-                  ...current,
-                  advancementMode: "milestone",
-                  milestoneGranted: false,
-                }))
-              }
-            >
-              Marcos do mestre
-            </button>
           </div>
         </div>
 
-        {character.advancementMode === "xp" ? (
-          <div className="xp-advancement">
-            <label>
-              <span>XP total atual</span>
-              <input
-                type="number"
-                min={experienceForLevel(character.level)}
-                step={1}
-                value={character.experiencePoints}
-                onChange={(event) =>
-                  updateCharacter(
-                    "experiencePoints",
-                    Math.max(
-                      experienceForLevel(character.level),
-                      Math.floor(Number(event.target.value) || 0),
-                    ),
-                  )
-                }
-              />
-            </label>
-            <div className="xp-track-copy">
-              <div>
-                <strong>
-                  {character.level >= 20
-                    ? "Nível máximo alcançado"
-                    : `${character.experiencePoints.toLocaleString("pt-BR")} / ${nextLevelXp?.toLocaleString("pt-BR")} XP`}
-                </strong>
-                <small>
-                  {character.level >= 20
-                    ? "A progressão termina no nível 20."
-                    : xpRemaining
-                      ? `Faltam ${xpRemaining.toLocaleString("pt-BR")} XP para o nível ${character.level + 1}.`
-                      : `XP suficiente para subir ao nível ${character.level + 1}.`}
-                </small>
-              </div>
-              <span>O total informado alcança o nível {xpLevelUnlocked}.</span>
-            </div>
-            <div className="xp-track" aria-label={`${Math.round(progress * 100)}% até o próximo nível`}>
-              <i style={{ width: `${progress * 100}%` }} />
-            </div>
-          </div>
-        ) : (
-          <label className="milestone-confirmation">
+        <div className="xp-advancement">
+          <label>
+            <span>XP total (opcional)</span>
             <input
-              type="checkbox"
-              checked={character.milestoneGranted}
+              type="number"
+              min={0}
+              step={1}
+              value={character.experiencePoints}
               onChange={(event) =>
-                updateCharacter("milestoneGranted", event.target.checked)
+                updateCharacter(
+                  "experiencePoints",
+                  Math.max(0, Math.floor(Number(event.target.value) || 0)),
+                )
               }
             />
-            <span>
-              <strong>O mestre concedeu o próximo nível</strong>
-              <small>
-                Isto não é um “ponto” genérico: a confirmação vale exatamente
-                um avanço e é consumida ao subir.
-              </small>
-            </span>
           </label>
-        )}
+          <div className="xp-track-copy">
+            <div>
+              <strong>
+                {character.level >= 20
+                  ? `${character.experiencePoints.toLocaleString("pt-BR")} XP registrados`
+                  : `${character.experiencePoints.toLocaleString("pt-BR")} / ${nextLevelXp?.toLocaleString("pt-BR")} XP`}
+              </strong>
+              <small>
+                {character.level >= 20
+                  ? "Nível máximo da tabela — o XP continua editável."
+                  : xpRemaining
+                    ? `Pela tabela, faltam ${xpRemaining.toLocaleString("pt-BR")} XP para o nível ${character.level + 1}; isso não bloqueia o ajuste.`
+                    : `Pela tabela, o nível ${character.level + 1} já está disponível.`}
+              </small>
+            </div>
+            <span>O XP informado corresponde ao nível {xpLevelUnlocked}.</span>
+          </div>
+          <div
+            className="xp-track"
+            aria-label={`${Math.round(progress * 100)}% até o próximo nível pela tabela de XP`}
+          >
+            <i style={{ width: `${progress * 100}%` }} />
+          </div>
+        </div>
 
         <div className="advancement-action-row">
           {classLevelEntries.length > 1 && (
             <label>
-              Nova progressão em
+              Ajustar classe
               <select
                 value={selectedEntryId}
                 onChange={(event) =>
@@ -8564,22 +8501,32 @@ export default function HomePage() {
           )}
           <div>
             <small>
-              A tabela de XP é a mesma em 2014 e 2024 e usa o nível total do
-              personagem, inclusive em multiclasse.
+              {classLevelEntries.length > 1
+                ? canDecreaseLevel
+                  ? "Escolha qual classe ganha ou perde o nível. Cada classe mantém no mínimo 1 nível."
+                  : "Esta classe já está no nível 1. Se quiser reduzir o total, escolha outra classe ou remova uma classe."
+                : "O XP é apenas uma referência: o nível pode ser ajustado livremente."}
             </small>
-            <button
-              className="primary-button"
-              disabled={!levelAdvanceAvailable || character.level >= 20}
-              onClick={() => advanceCharacterOneLevel(selectedEntry?.id)}
-            >
-              {character.level >= 20
-                ? "Nível máximo"
-                : levelAdvanceAvailable
-                  ? `Subir para o nível ${character.level + 1}`
-                  : character.advancementMode === "xp"
-                    ? `Exige ${nextLevelXp?.toLocaleString("pt-BR")} XP`
-                    : "Aguardando concessão do mestre"}
-            </button>
+            <div className="level-adjust-buttons">
+              <button
+                className="ghost-button"
+                disabled={!canDecreaseLevel}
+                onClick={() => adjustCharacterLevel(-1, selectedEntry?.id)}
+              >
+                <Minus size={16} />
+                Diminuir para {Math.max(minimumLevel, character.level - 1)}
+              </button>
+              <button
+                className="primary-button"
+                disabled={character.level >= 20}
+                onClick={() => adjustCharacterLevel(1, selectedEntry?.id)}
+              >
+                <Plus size={16} />
+                {character.level >= 20
+                  ? "Nível máximo"
+                  : `Aumentar para ${character.level + 1}`}
+              </button>
+            </div>
           </div>
         </div>
       </section>
@@ -8722,14 +8669,11 @@ export default function HomePage() {
             {viewedLevel === character.level + 1 && (
               <button
                 className="primary-button"
-                disabled={!levelAdvanceAvailable}
-                onClick={() => advanceCharacterOneLevel(classLevelEntries[0]?.id)}
+                onClick={() =>
+                  adjustCharacterLevel(1, classLevelEntries[0]?.id)
+                }
               >
-                {levelAdvanceAvailable
-                  ? `Subir para o nível ${viewedLevel}`
-                  : character.advancementMode === "xp"
-                    ? `Exige ${experienceForLevel(viewedLevel).toLocaleString("pt-BR")} XP`
-                    : "Aguardando o mestre"}
+                Subir para o nível {viewedLevel}
               </button>
             )}
           </div>

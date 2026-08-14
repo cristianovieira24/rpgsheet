@@ -50,19 +50,6 @@ export function experienceToNextLevel(level: number, experience: number) {
   return Math.max(0, XP_THRESHOLDS[currentLevel + 1] - Math.max(0, experience));
 }
 
-export function canAdvanceOneLevel(
-  mode: AdvancementMode,
-  level: number,
-  experience: number,
-  milestoneGranted: boolean,
-) {
-  const currentLevel = clampCharacterLevel(level);
-  if (currentLevel >= 20) return false;
-  return mode === "xp"
-    ? experience >= XP_THRESHOLDS[currentLevel + 1]
-    : milestoneGranted;
-}
-
 export function advancementProgress(level: number, experience: number) {
   const currentLevel = clampCharacterLevel(level);
   if (currentLevel >= 20) return 1;
