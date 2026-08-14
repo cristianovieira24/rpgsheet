@@ -485,6 +485,10 @@ type CharacterState = {
   tempHp: number;
   inspiration: boolean;
   proficientSkills: string[];
+  suppressedProficientSkills: string[];
+  proficientSavingThrows: AbilityKey[];
+  suppressedSavingThrows: AbilityKey[];
+  otherProficiencies: string[];
   selectedSpellIds: string[];
   spellcastingMode: "auto" | "manual";
   spellcastingProfileId: string;
@@ -605,6 +609,10 @@ const defaultCharacter: CharacterState = {
   tempHp: 0,
   inspiration: false,
   proficientSkills: [],
+  suppressedProficientSkills: [],
+  proficientSavingThrows: [],
+  suppressedSavingThrows: [],
+  otherProficiencies: [],
   selectedSpellIds: [],
   spellcastingMode: "auto",
   spellcastingProfileId: "none",
@@ -1221,11 +1229,8 @@ function normalizeCharacterData(raw: Partial<CharacterState>): CharacterState {
     experiencePoints:
       typeof raw.experiencePoints === "number" &&
       Number.isFinite(raw.experiencePoints)
-        ? Math.max(
-            experienceForLevel(normalizedLevel),
-            Math.floor(raw.experiencePoints),
-          )
-        : experienceForLevel(normalizedLevel),
+        ? Math.max(0, Math.floor(raw.experiencePoints))
+        : 0,
     milestoneGranted: raw.milestoneGranted === true,
     classLevels: normalizedClassLevels,
     speciesId,
@@ -1238,6 +1243,33 @@ function normalizeCharacterData(raw: Partial<CharacterState>): CharacterState {
     },
     languages: Array.isArray(raw.languages)
       ? raw.languages.filter(
+          (entry): entry is string => typeof entry === "string",
+        )
+      : [],
+    proficientSkills: Array.isArray(raw.proficientSkills)
+      ? raw.proficientSkills.filter(
+          (entry): entry is string => typeof entry === "string",
+        )
+      : [],
+    suppressedProficientSkills: Array.isArray(raw.suppressedProficientSkills)
+      ? raw.suppressedProficientSkills.filter(
+          (entry): entry is string => typeof entry === "string",
+        )
+      : [],
+    proficientSavingThrows: Array.isArray(raw.proficientSavingThrows)
+      ? raw.proficientSavingThrows.filter(
+          (entry): entry is AbilityKey =>
+            ["str", "dex", "con", "int", "wis", "cha"].includes(entry),
+        )
+      : [],
+    suppressedSavingThrows: Array.isArray(raw.suppressedSavingThrows)
+      ? raw.suppressedSavingThrows.filter(
+          (entry): entry is AbilityKey =>
+            ["str", "dex", "con", "int", "wis", "cha"].includes(entry),
+        )
+      : [],
+    otherProficiencies: Array.isArray(raw.otherProficiencies)
+      ? raw.otherProficiencies.filter(
           (entry): entry is string => typeof entry === "string",
         )
       : [],
@@ -1672,6 +1704,7 @@ export default function HomePage() {
   const [customSpells, setCustomSpells] = useState<Spell[]>([]);
   const [customSpellOpen, setCustomSpellOpen] = useState(false);
   const [sheetEditOpen, setSheetEditOpen] = useState(false);
+  const [proficiencyOpen, setProficiencyOpen] = useState(false);
 
   const [inventorySearch, setInventorySearch] = useState("");
   const [storyPrompt, setStoryPrompt] = useState(storyPrompts[0]);
@@ -2338,14 +2371,79 @@ export default function HomePage() {
       ...selectedSpeciesSkills,
     ].filter(Boolean),
   );
-  const effectiveProficientSkills = new Set(
+  const automaticProficientSkills = new Set(
     [
-      ...character.proficientSkills,
       ...classGrantedSkills,
       ...backgroundGrantedSkills,
       ...speciesGrantedSkills,
     ].filter(Boolean),
   );
+  const effectiveProficientSkills = new Set(
+    [
+      ...character.proficientSkills,
+      ...Array.from(automaticProficientSkills).filter(
+        (skill) => !character.suppressedProficientSkills.includes(skill),
+      ),
+    ].filter(Boolean),
+  );
+  const automaticSavingThrows = new Set<AbilityKey>(
+    (selectedClass?.saves ?? []) as readonly AbilityKey[],
+  );
+  const effectiveSavingThrows = new Set<AbilityKey>([
+    ...character.proficientSavingThrows,
+    ...Array.from(automaticSavingThrows).filter(
+      (ability) => !character.suppressedSavingThrows.includes(ability),
+    ),
+  ]);
+  const backgroundToolProficiency = selectedBackground?.tool ?? "";
+
+  const toggleSkillProficiency = (skillName: string) => {
+    const automatic = automaticProficientSkills.has(skillName);
+    setCharacter((current) => {
+      if (automatic) {
+        const suppressed = current.suppressedProficientSkills.includes(skillName);
+        return {
+          ...current,
+          suppressedProficientSkills: suppressed
+            ? current.suppressedProficientSkills.filter(
+                (entry) => entry !== skillName,
+              )
+            : [...current.suppressedProficientSkills, skillName],
+        };
+      }
+      const selected = current.proficientSkills.includes(skillName);
+      return {
+        ...current,
+        proficientSkills: selected
+          ? current.proficientSkills.filter((entry) => entry !== skillName)
+          : [...current.proficientSkills, skillName],
+      };
+    });
+  };
+
+  const toggleSavingThrowProficiency = (ability: AbilityKey) => {
+    const automatic = automaticSavingThrows.has(ability);
+    setCharacter((current) => {
+      if (automatic) {
+        const suppressed = current.suppressedSavingThrows.includes(ability);
+        return {
+          ...current,
+          suppressedSavingThrows: suppressed
+            ? current.suppressedSavingThrows.filter(
+                (entry) => entry !== ability,
+              )
+            : [...current.suppressedSavingThrows, ability],
+        };
+      }
+      const selected = current.proficientSavingThrows.includes(ability);
+      return {
+        ...current,
+        proficientSavingThrows: selected
+          ? current.proficientSavingThrows.filter((entry) => entry !== ability)
+          : [...current.proficientSavingThrows, ability],
+      };
+    });
+  };
   const passivePerception =
     overrides.passivePerception ??
     10 +
@@ -7262,15 +7360,15 @@ export default function HomePage() {
                 : "ajustar nível"}
             </small>
           </button>
-          <div className="proficiency-control">
+          <button
+            className="proficiency-control"
+            title="Abrir proficiências, salvaguardas e idiomas"
+            onClick={() => setProficiencyOpen(true)}
+          >
             <span>Proficiência</span>
             <strong>{signed(pb)}</strong>
-            <small>
-              {character.level < 20
-                ? `próximo aumento no nível ${Math.min(20, Math.floor((character.level - 1) / 4) * 4 + 5)}`
-                : "valor máximo"}
-            </small>
-          </div>
+            <small>perícias e idiomas</small>
+          </button>
           <button
             className={`inspiration-button ${character.inspiration ? "active" : ""}`}
             onClick={() =>
@@ -7488,14 +7586,42 @@ export default function HomePage() {
                   <small>Prof. {signed(pb)}</small>
                 </div>
                 {abilities.map((ability) => {
-                  const proficient = selectedClass?.saves.includes(
-                    ability.key as never,
-                  );
+                  const classGranted = automaticSavingThrows.has(ability.key);
+                  const manuallyProficient =
+                    character.proficientSavingThrows.includes(ability.key);
+                  const suppressed =
+                    character.suppressedSavingThrows.includes(ability.key);
+                  const proficient = effectiveSavingThrows.has(ability.key);
                   const extra = overrides.saveBonuses[ability.key] ?? 0;
                   return (
-                    <div className="sheet-line" key={ability.key}>
+                    <button
+                      className="sheet-line"
+                      key={ability.key}
+                      aria-pressed={proficient}
+                      title={
+                        classGranted
+                          ? suppressed
+                            ? "Proficiência da classe desativada manualmente. Clique para restaurar."
+                            : "Proficiência da classe. Clique para desativar manualmente."
+                          : "Clique para alternar esta proficiência em salvaguarda."
+                      }
+                      onClick={() =>
+                        toggleSavingThrowProficiency(ability.key)
+                      }
+                    >
                       <i className={proficient ? "filled" : ""} />
-                      <span>{ability.name}</span>
+                      <span>
+                        {ability.name}
+                        <small>
+                          {classGranted
+                            ? suppressed
+                              ? "classe · desativada"
+                              : "classe"
+                            : manuallyProficient
+                              ? "manual"
+                              : ""}
+                        </small>
+                      </span>
                       <strong>
                         {signed(
                           modifier(finalAbilities[ability.key]) +
@@ -7508,7 +7634,7 @@ export default function HomePage() {
                           {signed(extra)}
                         </small>
                       )}
-                    </div>
+                    </button>
                   );
                 })}
               </section>
@@ -7525,6 +7651,8 @@ export default function HomePage() {
                   );
                   const manuallyProficient =
                     character.proficientSkills.includes(skill.name);
+                  const suppressed =
+                    character.suppressedProficientSkills.includes(skill.name);
                   const proficient = effectiveProficientSkills.has(skill.name);
                   const extra = overrides.skillBonuses[skill.name] ?? 0;
                   const value =
@@ -7536,25 +7664,17 @@ export default function HomePage() {
                       className="sheet-line"
                       key={skill.name}
                       title={
-                        speciesGranted
-                          ? `Concedida por ${selectedSpecies?.name}`
+                        suppressed
+                          ? "Proficiência automática desativada. Clique para restaurar."
+                          : speciesGranted
+                          ? `Concedida por ${selectedSpecies?.name}. Clique para ajustar.`
                           : classGranted
-                            ? "Concedida pela classe"
+                            ? "Concedida pela classe. Clique para ajustar."
                           : backgroundGranted
-                            ? `Concedida por ${selectedBackground?.name}`
+                            ? `Concedida por ${selectedBackground?.name}. Clique para ajustar.`
                             : "Clique para alternar proficiência"
                       }
-                      onClick={() => {
-                        if (!speciesGranted && !classGranted && !backgroundGranted)
-                          updateCharacter(
-                            "proficientSkills",
-                            manuallyProficient
-                              ? character.proficientSkills.filter(
-                                  (entry) => entry !== skill.name,
-                                )
-                              : [...character.proficientSkills, skill.name],
-                          );
-                      }}
+                      onClick={() => toggleSkillProficiency(skill.name)}
                     >
                       <i className={proficient ? "filled" : ""} />
                       <span>
@@ -7567,7 +7687,10 @@ export default function HomePage() {
                               ? " · classe"
                             : backgroundGranted
                               ? ` · ${selectedBackground?.name}`
+                              : manuallyProficient
+                                ? " · manual"
                               : ""}
+                          {suppressed ? " · desativada" : ""}
                         </small>
                       </span>
                       <strong>{signed(value)}</strong>
@@ -12107,6 +12230,242 @@ export default function HomePage() {
             setActiveSpell(spell);
           }}
         />
+      )}
+
+      {proficiencyOpen && (
+        <div
+          className="modal-layer"
+          onMouseDown={() => setProficiencyOpen(false)}
+        >
+          <article
+            className="modal proficiency-modal"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              aria-label="Fechar proficiências e idiomas"
+              onClick={() => setProficiencyOpen(false)}
+            >
+              <X />
+            </button>
+            <span className="eyebrow">
+              <Shield size={14} /> Conhecimentos do personagem
+            </span>
+            <h2>Proficiências e idiomas.</h2>
+            <p className="lead">
+              As escolhas da criação chegam aqui automaticamente. Você pode
+              acrescentar, remover ou restaurar qualquer proficiência sem
+              alterar a classe, a espécie ou o antecedente.
+            </p>
+
+            <section className="proficiency-manager-section">
+              <div className="edit-section-head">
+                <h3>Salvaguardas</h3>
+                <small>Marque quantas o personagem possuir</small>
+              </div>
+              <div className="proficiency-toggle-grid saves">
+                {abilities.map((ability) => {
+                  const active = effectiveSavingThrows.has(ability.key);
+                  const automatic = automaticSavingThrows.has(ability.key);
+                  const suppressed =
+                    character.suppressedSavingThrows.includes(ability.key);
+                  return (
+                    <button
+                      key={ability.key}
+                      className={active ? "active" : ""}
+                      aria-pressed={active}
+                      onClick={() =>
+                        toggleSavingThrowProficiency(ability.key)
+                      }
+                    >
+                      <i />
+                      <span>
+                        <strong>{ability.name}</strong>
+                        <small>
+                          {automatic
+                            ? suppressed
+                              ? "Classe · removida manualmente"
+                              : "Concedida pela classe"
+                            : active
+                              ? "Adicionada manualmente"
+                              : "Sem proficiência"}
+                        </small>
+                      </span>
+                      <b>{signed(modifier(finalAbilities[ability.key]) + (active ? pb : 0))}</b>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="proficiency-manager-section">
+              <div className="edit-section-head">
+                <h3>Perícias</h3>
+                <small>Sincronizadas com toda a criação</small>
+              </div>
+              <div className="proficiency-toggle-grid skills">
+                {skills.map((skill) => {
+                  const active = effectiveProficientSkills.has(skill.name);
+                  const automatic = automaticProficientSkills.has(skill.name);
+                  const suppressed =
+                    character.suppressedProficientSkills.includes(skill.name);
+                  const sources = [
+                    speciesGrantedSkills.has(skill.name)
+                      ? selectedSpecies?.name
+                      : "",
+                    classGrantedSkills.has(skill.name) ? "Classe" : "",
+                    backgroundGrantedSkills.has(skill.name)
+                      ? selectedBackground?.name
+                      : "",
+                  ].filter(Boolean);
+                  return (
+                    <button
+                      key={skill.name}
+                      className={active ? "active" : ""}
+                      aria-pressed={active}
+                      onClick={() => toggleSkillProficiency(skill.name)}
+                    >
+                      <i />
+                      <span>
+                        <strong>{skill.name}</strong>
+                        <small>
+                          {automatic
+                            ? `${sources.join(" + ")}${suppressed ? " · removida" : ""}`
+                            : active
+                              ? "Adicionada manualmente"
+                              : skill.ability.toUpperCase()}
+                        </small>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+
+            <section className="proficiency-manager-section">
+              <div className="edit-section-head">
+                <h3>Idiomas</h3>
+                <small>{knownLanguages.length} conhecidos no total</small>
+              </div>
+              <div className="proficiency-source-row">
+                {fixedLanguages.map((language) => (
+                  <span key={language}>
+                    <Check size={13} />
+                    {language}
+                    <small>automático</small>
+                  </span>
+                ))}
+              </div>
+              <div className="proficiency-edit-list">
+                {character.languages.map((language, index) => (
+                  <label key={`language-${index}`}>
+                    <span>Idioma editável {index + 1}</span>
+                    <input
+                      aria-label={`Idioma editável ${index + 1}`}
+                      value={language}
+                      placeholder="Ex.: Élfico, Infernal, Celestial…"
+                      onChange={(event) => {
+                        const next = [...character.languages];
+                        next[index] = event.target.value;
+                        updateCharacter("languages", next);
+                      }}
+                    />
+                    <button
+                      aria-label={`Remover idioma ${index + 1}`}
+                      title="Remover idioma"
+                      onClick={() =>
+                        updateCharacter(
+                          "languages",
+                          character.languages.filter(
+                            (_, languageIndex) => languageIndex !== index,
+                          ),
+                        )
+                      }
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </label>
+                ))}
+              </div>
+              <button
+                className="ghost-button proficiency-add-button"
+                onClick={() =>
+                  updateCharacter("languages", [...character.languages, ""])
+                }
+              >
+                <Plus size={15} /> Adicionar idioma
+              </button>
+            </section>
+
+            <section className="proficiency-manager-section">
+              <div className="edit-section-head">
+                <h3>Ferramentas, armas e outras proficiências</h3>
+                <small>Use uma linha para cada conhecimento</small>
+              </div>
+              {backgroundToolProficiency && (
+                <div className="proficiency-source-row">
+                  <span>
+                    <Check size={13} />
+                    {backgroundToolProficiency}
+                    <small>{selectedBackground?.name}</small>
+                  </span>
+                </div>
+              )}
+              <div className="proficiency-edit-list">
+                {character.otherProficiencies.map((entry, index) => (
+                  <label key={`proficiency-${index}`}>
+                    <span>Proficiência personalizada {index + 1}</span>
+                    <input
+                      aria-label={`Proficiência personalizada ${index + 1}`}
+                      value={entry}
+                      placeholder="Ex.: Armaduras pesadas, ferramentas de ladrão…"
+                      onChange={(event) => {
+                        const next = [...character.otherProficiencies];
+                        next[index] = event.target.value;
+                        updateCharacter("otherProficiencies", next);
+                      }}
+                    />
+                    <button
+                      aria-label={`Remover proficiência personalizada ${index + 1}`}
+                      title="Remover proficiência"
+                      onClick={() =>
+                        updateCharacter(
+                          "otherProficiencies",
+                          character.otherProficiencies.filter(
+                            (_, proficiencyIndex) =>
+                              proficiencyIndex !== index,
+                          ),
+                        )
+                      }
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </label>
+                ))}
+              </div>
+              <button
+                className="ghost-button proficiency-add-button"
+                onClick={() =>
+                  updateCharacter("otherProficiencies", [
+                    ...character.otherProficiencies,
+                    "",
+                  ])
+                }
+              >
+                <Plus size={15} /> Adicionar proficiência
+              </button>
+            </section>
+
+            <div className="modal-actions">
+              <button
+                className="primary-button"
+                onClick={() => setProficiencyOpen(false)}
+              >
+                <Check size={16} /> Concluir
+              </button>
+            </div>
+          </article>
+        </div>
       )}
 
       {sheetEditOpen && (
