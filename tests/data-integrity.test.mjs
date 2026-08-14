@@ -13,6 +13,14 @@ import {
   redistributeClassLevel,
   totalClassLevels,
 } from "../app/data/multiclass.ts";
+import {
+  XP_THRESHOLDS,
+  advancementProgress,
+  canAdvanceOneLevel,
+  experienceForLevel,
+  experienceToNextLevel,
+  levelFromExperience,
+} from "../app/data/advancement.ts";
 
 const abilityKeys = new Set(["str", "dex", "con", "int", "wis", "cha"]);
 const skillNames = new Set(skills.map((entry) => entry.name));
@@ -156,6 +164,26 @@ test("orçamento de multiclasse nunca ultrapassa o nível total", () => {
   const redistributed = redistributeClassLevel(fitted, 6, "a", 5);
   assert.equal(totalClassLevels(redistributed), 6);
   assert.ok(redistributed.every((entry) => entry.level >= 1));
+});
+
+test("avanço por XP usa a tabela oficial completa de 2014 e 2024", () => {
+  assert.equal(XP_THRESHOLDS.length, 21);
+  assert.equal(experienceForLevel(14), 140_000);
+  assert.equal(experienceForLevel(15), 165_000);
+  assert.equal(experienceForLevel(20), 355_000);
+  assert.equal(levelFromExperience(164_999), 14);
+  assert.equal(levelFromExperience(165_000), 15);
+  assert.equal(experienceToNextLevel(14, 140_001), 24_999);
+  assert.equal(advancementProgress(14, 152_500), 0.5);
+});
+
+test("um ponto de XP não libera nível e marco concede exatamente um avanço", () => {
+  assert.equal(canAdvanceOneLevel("xp", 14, 1, false), false);
+  assert.equal(canAdvanceOneLevel("xp", 14, 164_999, true), false);
+  assert.equal(canAdvanceOneLevel("xp", 14, 165_000, false), true);
+  assert.equal(canAdvanceOneLevel("milestone", 14, 0, false), false);
+  assert.equal(canAdvanceOneLevel("milestone", 14, 0, true), true);
+  assert.equal(canAdvanceOneLevel("milestone", 20, 0, true), false);
 });
 
 test("requisitos e níveis de conjurador multiclasses são calculados", () => {

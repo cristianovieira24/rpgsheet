@@ -1613,18 +1613,23 @@ h2,
   text-transform: uppercase;
   letter-spacing: 0.1em;
 }
-.level-control input {
+.level-control strong {
   grid-row: 1 / span 2;
   grid-column: 2;
   width: 48px;
   min-height: 44px;
+  display: grid;
+  place-items: center;
   padding: 0;
-  border: 0;
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.09);
   color: white;
   font: 1.45rem var(--font-display);
   text-align: center;
+}
+.level-control:hover {
+  border-color: var(--accent-2);
+  background: rgba(255, 255, 255, 0.09);
 }
 .level-control small {
   color: rgba(255, 255, 255, 0.34);
@@ -5896,6 +5901,148 @@ h2,
   font-size: 2.2rem;
 }
 
+.advancement-panel {
+  display: grid;
+  gap: 18px;
+  margin-bottom: 15px;
+  padding: 22px;
+  border: 1px solid color-mix(in srgb, var(--accent) 38%, var(--line));
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 88% 12%, var(--accent-soft), transparent 30%),
+    var(--surface);
+}
+.advancement-heading,
+.advancement-action-row,
+.xp-track-copy,
+.milestone-confirmation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+.advancement-heading h2 {
+  margin: 5px 0 4px;
+  font: 1.65rem/1.1 var(--font-display);
+}
+.advancement-heading p,
+.advancement-action-row small,
+.xp-track-copy small,
+.milestone-confirmation small {
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+.advancement-mode {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-2);
+}
+.advancement-mode button {
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 0.7rem;
+  font-weight: 780;
+}
+.advancement-mode button.active {
+  color: white;
+  background: var(--accent);
+  box-shadow: 0 8px 20px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.xp-advancement {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.32fr) 1fr;
+  gap: 12px 18px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface-2);
+}
+.xp-advancement label,
+.advancement-action-row label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.67rem;
+  font-weight: 760;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.xp-advancement input,
+.advancement-action-row select {
+  width: 100%;
+  min-height: 42px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--surface);
+  font: 0.92rem var(--font-body);
+}
+.xp-track-copy > div {
+  display: grid;
+  gap: 3px;
+}
+.xp-track-copy > span {
+  color: var(--accent);
+  font-size: 0.7rem;
+  font-weight: 780;
+}
+.xp-track {
+  grid-column: 1 / -1;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--line);
+}
+.xp-track i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  transition: width 320ms ease;
+}
+.milestone-confirmation {
+  justify-content: flex-start;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--surface-2);
+}
+.milestone-confirmation input {
+  width: 21px;
+  height: 21px;
+  accent-color: var(--accent);
+}
+.milestone-confirmation span {
+  display: grid;
+  gap: 3px;
+}
+.advancement-action-row {
+  align-items: end;
+}
+.advancement-action-row > label {
+  width: min(310px, 100%);
+}
+.advancement-action-row > div {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 14px;
+  text-align: right;
+}
+.advancement-action-row > div > small {
+  max-width: 440px;
+}
+
 .multiclass-sheet-button {
   align-self: center;
   display: inline-flex;
@@ -6995,6 +7142,31 @@ h2,
 }
 
 @media (max-width: 900px) {
+  .advancement-heading,
+  .advancement-action-row,
+  .xp-track-copy {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .advancement-mode {
+    width: 100%;
+  }
+  .xp-advancement {
+    grid-template-columns: 1fr;
+  }
+  .xp-track {
+    grid-column: 1;
+  }
+  .advancement-action-row > label {
+    width: 100%;
+  }
+  .advancement-action-row > div {
+    width: 100%;
+    margin-left: 0;
+    align-items: stretch;
+    flex-direction: column;
+    text-align: left;
+  }
   .custom-definition-grid,
   .selected-feats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));

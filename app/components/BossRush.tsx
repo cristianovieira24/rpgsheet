@@ -922,12 +922,11 @@ export function BossRush({ hero }: { hero: BossRushHero }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null); const gameRef = useRef<Game | null>(null);
   const [selectedClass, setSelectedClass] = useState<HeroClass | null>(null); const [runId, setRunId] = useState(0); const [cards, setCards] = useState<UpgradeCard[]>([]); const [picked, setPicked] = useState<Array<{ id: string; name: string; rarity: Rarity }>>([]);
   const [hud, setHud] = useState<Hud>({ phase: "select", stage: 0, elapsed: 0, hp: 0, maxHp: 1, barrier: 0, barrierMax: 0, xp: 0, xpNeeded: 1, level: 1, kills: 0, bossHp: 0, bossMaxHp: 1, bossRage: false, ultimate: 0, ultimateMax: 100, ultimateName: "Nenhuma ultimate", paused: false, dashCharges: 1, dashMax: 1, dashCooldown: 0, dashBaseCooldown: 5, bossVulnerable: true, relics: 0, slots: { attack: null, dash: null, technique1: null, technique2: null, ultimate: null }, passives: [] });
-  const [meta, setMeta] = useState<MetaProgress>(() => ({ marks: 0, upgrades: { ...EMPTY_META_UPGRADES } }));
+  const [meta, setMeta] = useState<MetaProgress>(() => loadMetaProgress());
   const metaRef = useRef(meta); const rewardRef = useRef(""); const rewardLockedRef = useRef(false); const shopAutoPausedRef = useRef(false);
   const [shopOpen, setShopOpen] = useState(false); const [metaMessage, setMetaMessage] = useState("");
   const preview = selectedClass ? BASES[selectedClass] : null;
 
-  useEffect(() => { const loaded = loadMetaProgress(); metaRef.current = loaded; setMeta(loaded); }, []);
   useEffect(() => {
     if (rewardLockedRef.current || !["stage-clear", "victory", "defeat"].includes(hud.phase)) return;
     const key = `${runId}:${hud.phase}:${hud.stage}`; if (rewardRef.current === key) return; rewardRef.current = key;
