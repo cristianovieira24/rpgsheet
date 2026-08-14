@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { legacyBackgrounds, legacyClassProgressions, legacyLineages, legacySpecies } from "../app/data/legacy.ts";
-import { classProgressions, subclasses } from "../app/data/progression.ts";
+import { classProgressions, speciesSkillProfiles, subclasses } from "../app/data/progression.ts";
 import { classes, skills } from "../app/data/rules.ts";
 import feats from "../app/data/feats.generated.json" with { type: "json" };
 import { spellcastingProfiles } from "../app/data/spellcasting.ts";
 import {
   combinedCasterLevel,
+  classSkillChoiceCount,
   fitClassLevelsToBudget,
   multiclassRequirementFailures,
   redistributeClassLevel,
@@ -71,6 +72,35 @@ test("classes e subclasses apontam para classes válidas e ids únicos", () => {
   }
 });
 
+test("todas as classes iniciais concedem escolhas de perícia válidas", () => {
+  for (const entry of classes) {
+    assert.ok(entry.skillChoices > 0, `${entry.name}: nenhuma escolha de perícia`);
+    for (const skill of entry.skillOptions) {
+      assert.ok(skillNames.has(skill), `${entry.name}: perícia desconhecida ${skill}`);
+    }
+  }
+  assert.equal(classes.find((entry) => entry.id === "bard")?.skillChoices, 3);
+  assert.equal(classes.find((entry) => entry.id === "rogue")?.skillChoices, 4);
+  assert.equal(classSkillChoiceCount("wizard", false, 2), 0);
+  assert.equal(classSkillChoiceCount("bard", false, 3), 1);
+  assert.equal(classSkillChoiceCount("ranger", false, 3), 1);
+  assert.equal(classSkillChoiceCount("rogue", false, 4), 1);
+});
+
+test("perfis de perícia de espécie só usam perícias e quantidades reconhecidas", () => {
+  for (const [key, profile] of Object.entries(speciesSkillProfiles)) {
+    assert.ok(key.startsWith("2014:") || key.startsWith("2024:"), `${key}: edição ausente`);
+    assert.ok(profile.trait && profile.note, `${key}: explicação incompleta`);
+    assert.ok(!profile.choices || profile.choices <= 2, `${key}: escolhas acima da interface`);
+    for (const skill of [...(profile.fixed ?? []), ...(profile.options ?? [])]) {
+      assert.ok(skillNames.has(skill), `${key}: perícia desconhecida ${skill}`);
+    }
+  }
+  assert.deepEqual(speciesSkillProfiles["2024:elf"].options, ["Intuição", "Percepção", "Sobrevivência"]);
+  assert.equal(speciesSkillProfiles["2024:human"].choices, 1);
+  assert.equal(speciesSkillProfiles["2014:half-elf"].choices, 2);
+});
+
 test("progressões de classe ficam entre os níveis 1 e 20", () => {
   for (const [edition, progressions] of [["2024", classProgressions], ["2014", legacyClassProgressions]]) {
     for (const classId of classes.map((entry) => entry.id).filter((id) => id !== "custom")) {
@@ -82,6 +112,38 @@ test("progressões de classe ficam entre os níveis 1 e 20", () => {
       }
     }
   }
+});
+
+test("progressões clássicas preservam todas as linhas de habilidade do Livro do Jogador 2014", () => {
+  const expectedFeatureLevels = {
+    barbarian: [1, 1, 2, 2, 3, 4, 5, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    bard: [1, 1, 2, 2, 3, 3, 4, 5, 5, 6, 6, 8, 9, 10, 10, 10, 12, 13, 14, 14, 15, 16, 17, 18, 19, 20],
+    cleric: [1, 1, 2, 2, 4, 5, 6, 6, 8, 8, 8, 10, 11, 12, 14, 16, 17, 17, 18, 19, 20],
+    druid: [1, 1, 2, 2, 4, 4, 6, 8, 8, 10, 12, 14, 16, 18, 18, 19, 20],
+    fighter: [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 17, 18, 19, 20],
+    monk: [1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    paladin: [1, 1, 2, 2, 2, 3, 3, 4, 5, 6, 7, 8, 10, 11, 12, 14, 15, 16, 18, 19, 20],
+    ranger: [1, 1, 2, 2, 3, 3, 4, 5, 6, 6, 7, 8, 8, 10, 10, 11, 12, 14, 14, 15, 16, 18, 19, 20],
+    rogue: [1, 1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20],
+    sorcerer: [1, 1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 17, 18, 19, 20],
+    warlock: [1, 1, 2, 3, 4, 6, 8, 10, 11, 12, 13, 14, 15, 16, 17, 19, 20],
+    wizard: [1, 1, 2, 4, 6, 8, 10, 12, 14, 16, 18, 19, 20],
+  };
+
+  for (const [classId, levels] of Object.entries(expectedFeatureLevels)) {
+    assert.deepEqual(
+      legacyClassProgressions[classId].map((feature) => feature.level),
+      levels,
+      `${classId}: linhas de habilidade 2014 divergentes`,
+    );
+  }
+
+  const warlock = legacyClassProgressions.warlock;
+  for (const [level, circle] of [[11, "6º"], [13, "7º"], [15, "8º"], [17, "9º"]]) {
+    const arcanum = warlock.find((feature) => feature.level === level && feature.name.includes("Arcano Místico"));
+    assert.ok(arcanum?.name.includes(circle), `bruxo: Arcano Místico de ${circle} ausente no nível ${level}`);
+  }
+  assert.equal(warlock.find((feature) => feature.level === 20)?.name, "Mestre Místico");
 });
 
 test("orçamento de multiclasse nunca ultrapassa o nível total", () => {

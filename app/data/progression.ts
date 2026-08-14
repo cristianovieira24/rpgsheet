@@ -577,6 +577,151 @@ export const officialSpeciesCatalog: OfficialSpeciesDefinition[] = [
   officialSpecies("vedalken", "Vedalken", "Guildmasters' Guide to Ravnica", "Humanoide analítico e anfíbio, treinado em uma perícia e parcialmente protegido contra efeitos mentais.", ["Desapaixonado", "Precisão Incansável", "Parcialmente Anfíbio"]),
 ];
 
+export type SpeciesSkillProfile = {
+  trait: string;
+  fixed?: string[];
+  choices?: number;
+  options?: string[];
+  optional?: boolean;
+  note: string;
+};
+
+/**
+ * Proficiências em perícias concedidas diretamente pela espécie.
+ *
+ * A chave inclui a edição porque espécies com o mesmo id podem ter regras
+ * diferentes em 2014 e 2024. Uma espécie ausente deste mapa não concede
+ * proficiência em perícia por sua regra de espécie — outros traços podem dar
+ * vantagem, bônus ou proficiências temporárias sem serem uma perícia fixa.
+ */
+export const speciesSkillProfiles: Record<string, SpeciesSkillProfile> = {
+  "2024:elf": {
+    trait: "Sentidos Aguçados",
+    choices: 1,
+    options: ["Intuição", "Percepção", "Sobrevivência"],
+    note: "Escolha Intuição, Percepção ou Sobrevivência.",
+  },
+  "2024:human": {
+    trait: "Habilidoso",
+    choices: 1,
+    note: "Escolha qualquer perícia.",
+  },
+  "2014:elf": {
+    trait: "Sentidos Aguçados",
+    fixed: ["Percepção"],
+    note: "Percepção é concedida automaticamente.",
+  },
+  "2014:half-elf": {
+    trait: "Versatilidade em Perícias",
+    choices: 2,
+    note: "Escolha duas perícias diferentes.",
+  },
+  "2014:half-orc": {
+    trait: "Ameaçador",
+    fixed: ["Intimidação"],
+    note: "Intimidação é concedida automaticamente.",
+  },
+  "2014:bugbear": {
+    trait: "Furtivo",
+    fixed: ["Furtividade"],
+    note: "Furtividade é concedida automaticamente.",
+  },
+  "2014:centaur": {
+    trait: "Afinidade Natural",
+    choices: 1,
+    options: ["Adestrar Animais", "Medicina", "Natureza", "Sobrevivência"],
+    note: "Escolha Adestrar Animais, Medicina, Natureza ou Sobrevivência.",
+  },
+  "2014:changeling": {
+    trait: "Instintos Metamorfos",
+    choices: 2,
+    options: ["Enganação", "Intuição", "Intimidação", "Atuação", "Persuasão"],
+    note: "Escolha duas perícias sociais diferentes.",
+  },
+  "2014:harengon": {
+    trait: "Sentidos Aguçados",
+    fixed: ["Percepção"],
+    note: "Percepção é concedida automaticamente.",
+  },
+  "2014:kenku": {
+    trait: "Treinamento Kenku",
+    choices: 2,
+    options: ["Acrobacia", "Enganação", "Prestidigitação", "Furtividade"],
+    note: "Escolha duas entre Acrobacia, Enganação, Prestidigitação e Furtividade.",
+  },
+  "2014:eladrin": {
+    trait: "Sentidos Aguçados",
+    fixed: ["Percepção"],
+    note: "Percepção é concedida automaticamente.",
+  },
+  "2014:sea-elf": {
+    trait: "Sentidos Aguçados",
+    fixed: ["Percepção"],
+    note: "Percepção é concedida automaticamente.",
+  },
+  "2014:shadar-kai": {
+    trait: "Sentidos Aguçados",
+    fixed: ["Percepção"],
+    note: "Percepção é concedida automaticamente.",
+  },
+  "2014:githyanki": {
+    trait: "Conhecimento Astral",
+    choices: 1,
+    optional: true,
+    note: "Registre a perícia atual escolhida após o Descanso Longo; ela pode ser trocada no próximo.",
+  },
+  "2014:astral-elf": {
+    trait: "Transe Astral",
+    choices: 1,
+    optional: true,
+    note: "Registre a perícia atual escolhida após o Transe; ela pode ser trocada ao terminar outro Transe.",
+  },
+  "2014:satyr": {
+    trait: "Festeiro",
+    fixed: ["Atuação", "Persuasão"],
+    note: "Atuação e Persuasão são concedidas automaticamente.",
+  },
+  "2014:shifter": {
+    trait: "Instintos Bestiais",
+    choices: 1,
+    options: ["Acrobacia", "Atletismo", "Intimidação", "Sobrevivência"],
+    note: "Escolha Acrobacia, Atletismo, Intimidação ou Sobrevivência.",
+  },
+  "2014:tabaxi": {
+    trait: "Talento Felino",
+    fixed: ["Percepção", "Furtividade"],
+    note: "Percepção e Furtividade são concedidas automaticamente.",
+  },
+  "2014:owlin": {
+    trait: "Penas Silenciosas",
+    fixed: ["Furtividade"],
+    note: "Furtividade é concedida automaticamente.",
+  },
+  "2014:warforged": {
+    trait: "Especialização de Projeto",
+    choices: 1,
+    note: "Escolha qualquer perícia; a proficiência em ferramenta é registrada separadamente.",
+  },
+  "2014:kender": {
+    trait: "Aptidão Kender",
+    choices: 1,
+    options: ["Intuição", "Investigação", "Prestidigitação", "Furtividade", "Sobrevivência"],
+    note: "Escolha Intuição, Investigação, Prestidigitação, Furtividade ou Sobrevivência.",
+  },
+  "2014:leonin": {
+    trait: "Instintos de Caçador",
+    choices: 1,
+    options: ["Atletismo", "Intimidação", "Percepção", "Sobrevivência"],
+    note: "Escolha Atletismo, Intimidação, Percepção ou Sobrevivência.",
+  },
+  "2014:vedalken": {
+    trait: "Precisão Incansável",
+    choices: 1,
+    options: ["Arcanismo", "História", "Investigação", "Medicina", "Atuação", "Prestidigitação"],
+    note: "Escolha uma das seis perícias da característica; a ferramenta é registrada separadamente.",
+  },
+};
+
 export const commonConditions = [
   "Agarrado", "Amedrontado", "Atordoado", "Caído", "Cego", "Enfeitiçado", "Envenenado", "Exaustão",
   "Impedido", "Incapacitado", "Inconsciente", "Invisível", "Paralisado", "Petrificado", "Sangrando",

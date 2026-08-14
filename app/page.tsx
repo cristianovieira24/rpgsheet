@@ -77,6 +77,7 @@ import {
   commonConditions,
   lineages,
   officialSpeciesCatalog,
+  speciesSkillProfiles,
   subclasses,
   type AccessKind,
 } from "./data/progression";
@@ -107,6 +108,7 @@ import {
 } from "./data/spellcasting";
 import {
   classSpellAbilities,
+  classSkillChoiceCount,
   combinedCasterLevel,
   fitClassLevelsToBudget,
   hasMixedClassEditions,
@@ -219,6 +221,7 @@ type SpeciesChoiceState = {
   skill: string;
   secondarySkill: string;
   replacementSkill: string;
+  replacementSecondarySkill: string;
   originFeat: string;
   spellAbility: AbilityKey | "";
   size: "Pequeno" | "Médio" | "";
@@ -563,6 +566,7 @@ const defaultCharacter: CharacterState = {
     skill: "",
     secondarySkill: "",
     replacementSkill: "",
+    replacementSecondarySkill: "",
     originFeat: "",
     spellAbility: "",
     size: "",
@@ -854,7 +858,6 @@ const ALL_LANGUAGES_2014 = [
 
 const SPECIES_WITH_SIZE_CHOICE = new Set(["aasimar", "human", "tiefling"]);
 const SPECIES_WITH_SPELL_ABILITY = new Set(["elf", "gnome", "tiefling"]);
-const SPECIES_WITH_SKILL_CHOICE = new Set(["elf", "human"]);
 
 function sourceShort(source: string) {
   return (
@@ -1816,6 +1819,7 @@ export default function HomePage() {
             subclassId: character.subclassId,
             ruleset: character.classRuleset,
             level: character.level,
+            skillChoices: [],
           },
         ]
       : [];
@@ -1862,6 +1866,14 @@ export default function HomePage() {
           ),
         }
       : selectedSpeciesBase;
+  const selectedSpeciesSkillProfile = character.speciesId
+    ? speciesSkillProfiles[`${character.speciesRuleset}:${character.speciesId}`]
+    : undefined;
+  const selectedSpeciesSkillChoices = selectedSpeciesSkillProfile?.optional
+    ? 0
+    : (selectedSpeciesSkillProfile?.choices ?? 0);
+  const selectedSpeciesSkillOptions =
+    selectedSpeciesSkillProfile?.options ?? skills.map((skill) => skill.name);
   const selectedBackground = activeBackgrounds.find(
     (entry) => entry.id === character.backgroundId,
   );
@@ -2225,6 +2237,7 @@ export default function HomePage() {
         subclassId: "",
         ruleset: multiclassDraftRuleset,
         level: 1,
+        skillChoices: [],
       } as ClassLevelEntry)
     : null;
   const multiclassCandidateFailures = multiclassCandidate
@@ -2252,41 +2265,47 @@ export default function HomePage() {
       skills.some((entry) => entry.name === skill),
     ),
   );
+  const classGrantedSkills = new Set(
+    classLevelEntries.flatMap((entry, index) => {
+      const definition = classes.find((candidate) => candidate.id === entry.classId);
+      if (!definition) return [];
+      const normalCount =
+        entry.classId === "custom"
+          ? character.customClass.skillChoices
+          : definition.skillChoices;
+      const count = classSkillChoiceCount(entry.classId, index === 0, normalCount);
+      return (entry.skillChoices ?? []).slice(0, count);
+    }),
+  );
   const customSpeciesSkills =
     character.speciesId === "custom"
       ? character.customSpecies.selectedSkills
       : [];
-  const fixedLegacySpeciesSkills = !revisedSpeciesRules
-    ? character.speciesId === "elf"
-      ? ["Percepção"]
-      : character.speciesId === "half-orc"
-        ? ["Intimidação"]
-        : []
-    : [];
-  const selectedSpeciesSkills = revisedSpeciesRules
-    ? SPECIES_WITH_SKILL_CHOICE.has(character.speciesId)
+  const fixedSpeciesSkills = selectedSpeciesSkillProfile?.fixed ?? [];
+  const selectedSpeciesSkills = [
+    ...(selectedSpeciesSkillChoices >= 1 ? [character.speciesChoices.skill] : []),
+    ...(selectedSpeciesSkillChoices >= 2
+      ? [character.speciesChoices.secondarySkill]
+      : []),
+    ...(!revisedSpeciesRules && character.lineageId === "variant-human"
       ? [character.speciesChoices.skill]
-      : []
-    : character.speciesId === "half-elf"
-      ? [
-          character.speciesChoices.skill,
-          character.speciesChoices.secondarySkill,
-        ]
-      : character.lineageId === "variant-human"
-        ? [character.speciesChoices.skill]
-        : [];
-  const fixedSpeciesSkillConflict = fixedLegacySpeciesSkills.find((skill) =>
+      : []),
+  ];
+  const fixedSpeciesSkillConflicts = fixedSpeciesSkills.filter((skill) =>
     backgroundGrantedSkills.has(skill),
   );
-  const fixedSpeciesReplacement = fixedSpeciesSkillConflict
-    ? character.speciesChoices.replacementSkill
-    : "";
+  const fixedSpeciesReplacements = fixedSpeciesSkillConflicts.map(
+    (_, index) =>
+      index === 0
+        ? character.speciesChoices.replacementSkill
+        : character.speciesChoices.replacementSecondarySkill,
+  );
   const speciesGrantedSkills = new Set(
     [
-      ...fixedLegacySpeciesSkills.filter(
-        (skill) => skill !== fixedSpeciesSkillConflict,
+      ...fixedSpeciesSkills.filter(
+        (skill) => !fixedSpeciesSkillConflicts.includes(skill),
       ),
-      fixedSpeciesReplacement,
+      ...fixedSpeciesReplacements,
       ...customSpeciesSkills,
       ...selectedSpeciesSkills,
     ].filter(Boolean),
@@ -2294,6 +2313,7 @@ export default function HomePage() {
   const effectiveProficientSkills = new Set(
     [
       ...character.proficientSkills,
+      ...classGrantedSkills,
       ...backgroundGrantedSkills,
       ...speciesGrantedSkills,
     ].filter(Boolean),
@@ -2610,6 +2630,7 @@ export default function HomePage() {
                 subclassId: current.subclassId,
                 ruleset: current.classRuleset,
                 level: current.level,
+                skillChoices: [],
               },
             ]
           : [];
@@ -2648,6 +2669,7 @@ export default function HomePage() {
                 subclassId: current.subclassId,
                 ruleset: current.classRuleset,
                 level: current.level,
+                skillChoices: [],
               },
             ]
           : [];
@@ -2685,6 +2707,7 @@ export default function HomePage() {
         skill: "",
         secondarySkill: "",
         replacementSkill: "",
+        replacementSecondarySkill: "",
         originFeat: "",
         spellAbility: "",
         size: "",
@@ -2719,6 +2742,7 @@ export default function HomePage() {
                 subclassId: current.subclassId,
                 ruleset: current.classRuleset,
                 level: current.level,
+                skillChoices: [],
               },
             ]
           : [];
@@ -2741,6 +2765,10 @@ export default function HomePage() {
               : "",
           ruleset: classRuleset,
           level: primaryLevel,
+          skillChoices:
+            oldPrimary?.classId === classId && oldPrimary.ruleset === classRuleset
+              ? oldPrimary.skillChoices
+              : [],
         },
         ...existing.slice(1).filter((entry) => entry.classId !== classId),
       ];
@@ -2828,7 +2856,7 @@ export default function HomePage() {
       );
       return [
         ...next,
-        { id: crypto.randomUUID(), classId, subclassId: "", ruleset, level: 1 },
+        { id: crypto.randomUUID(), classId, subclassId: "", ruleset, level: 1, skillChoices: [] },
       ];
     });
     setMulticlassDraftClassId("");
@@ -4041,12 +4069,17 @@ export default function HomePage() {
       !character.speciesChoices.size
     )
       return "Escolha o tamanho dessa espécie.";
+    const speciesSkillSelections = [
+      character.speciesChoices.skill,
+      character.speciesChoices.secondarySkill,
+    ].slice(0, selectedSpeciesSkillChoices);
     if (
-      revisedSpeciesRules &&
-      SPECIES_WITH_SKILL_CHOICE.has(character.speciesId) &&
-      !character.speciesChoices.skill
+      speciesSkillSelections.length < selectedSpeciesSkillChoices ||
+      speciesSkillSelections.some((skill) => !skill)
     )
-      return "Escolha a perícia concedida pela espécie.";
+      return `Escolha ${selectedSpeciesSkillChoices === 1 ? "a perícia" : `as ${selectedSpeciesSkillChoices} perícias`} concedida pela espécie.`;
+    if (new Set(speciesSkillSelections).size !== speciesSkillSelections.length)
+      return "As perícias da espécie precisam ser diferentes.";
     if (
       revisedSpeciesRules &&
       character.speciesId === "human" &&
@@ -4059,19 +4092,6 @@ export default function HomePage() {
       !character.speciesChoices.spellAbility
     )
       return "Escolha o atributo das magias da espécie.";
-    if (
-      !revisedSpeciesRules &&
-      character.speciesId === "half-elf" &&
-      (!character.speciesChoices.skill ||
-        !character.speciesChoices.secondarySkill)
-    )
-      return "Escolha as duas perícias do Meio-elfo.";
-    if (
-      !revisedSpeciesRules &&
-      character.speciesId === "half-elf" &&
-      character.speciesChoices.skill === character.speciesChoices.secondarySkill
-    )
-      return "As duas perícias do Meio-elfo precisam ser diferentes.";
     if (
       !revisedSpeciesRules &&
       character.lineageId === "variant-human" &&
@@ -4101,6 +4121,23 @@ export default function HomePage() {
   })();
   const speciesChoiceMissing =
     speciesTraitChoiceMissing || languageChoiceMissing;
+  const allClassSkillChoices = classLevelEntries.flatMap((entry) =>
+    (entry.skillChoices ?? []).filter(Boolean),
+  );
+  const classSkillChoiceMissing = classLevelEntries.find((entry, index) => {
+    const definition = classes.find((candidate) => candidate.id === entry.classId);
+    if (!definition) return false;
+    const normalCount =
+      entry.classId === "custom"
+        ? character.customClass.skillChoices
+        : definition.skillChoices;
+    const required = classSkillChoiceCount(entry.classId, index === 0, normalCount);
+    const chosen = (entry.skillChoices ?? []).filter(Boolean);
+    return chosen.length !== required || new Set(chosen).size !== chosen.length;
+  });
+  const duplicateClassSkill = allClassSkillChoices.find(
+    (skill, index) => allClassSkillChoices.indexOf(skill) !== index,
+  );
   const humanFeatConflict =
     character.speciesId === "human" &&
     revisedSpeciesRules &&
@@ -4109,8 +4146,11 @@ export default function HomePage() {
   const speciesSkillConflict = Array.from(speciesGrantedSkills).find((skill) =>
     backgroundGrantedSkills.has(skill),
   );
-  const fixedSpeciesSkillNeedsReplacement = Boolean(
-    fixedSpeciesSkillConflict && !fixedSpeciesReplacement,
+  const fixedSpeciesSkillNeedsReplacement = fixedSpeciesSkillConflicts.some(
+    (_, index) => !fixedSpeciesReplacements[index],
+  );
+  const classOriginSkillConflict = allClassSkillChoices.find(
+    (skill) => backgroundGrantedSkills.has(skill) || speciesGrantedSkills.has(skill),
   );
   const builderGate = (() => {
     if (builderStep === 0 && character.editionPolicy === "unanswered")
@@ -4130,6 +4170,15 @@ export default function HomePage() {
       return {
         ok: false,
         reason: `Distribua exatamente os ${character.level} níveis do personagem entre as classes.`,
+      };
+    if (builderStep === 2 && classSkillChoiceMissing) {
+      const name = classes.find((entry) => entry.id === classSkillChoiceMissing.classId)?.name;
+      return { ok: false, reason: `Conclua as escolhas de perícia de ${name ?? "cada classe"}.` };
+    }
+    if (builderStep === 2 && duplicateClassSkill)
+      return {
+        ok: false,
+        reason: `${duplicateClassSkill} foi escolhida por duas classes. Troque uma delas para não desperdiçar proficiência.`,
       };
     if (builderStep === 3 && !character.backgroundId)
       return { ok: false, reason: "Escolha um antecedente para continuar." };
@@ -4158,8 +4207,13 @@ export default function HomePage() {
       return {
         ok: false,
         reason: fixedSpeciesSkillNeedsReplacement
-          ? `Escolha uma perícia para substituir ${fixedSpeciesSkillConflict}.`
+          ? `Escolha uma perícia para substituir ${fixedSpeciesSkillConflicts.join(" e ")}.`
           : "A perícia da espécie deve ser diferente das perícias do antecedente.",
+      };
+    if (builderStep === 3 && classOriginSkillConflict)
+      return {
+        ok: false,
+        reason: `${classOriginSkillConflict} já vem da espécie ou do antecedente. Volte à Classe e escolha outra perícia.`,
       };
     if (builderStep === 4 && !abilitySelectionValid)
       return {
@@ -4537,6 +4591,11 @@ export default function HomePage() {
                         {sourceShort(entry.source)} · {group.edition}
                       </span>
                       <p>{entry.summary}</p>
+                      <p className="species-skill-summary">
+                        {speciesSkillProfiles[`${group.edition}:${entry.id}`]
+                          ? `Perícia · ${speciesSkillProfiles[`${group.edition}:${entry.id}`].note}`
+                          : "Perícias · esta espécie não concede proficiência fixa."}
+                      </p>
                       <ul>
                         {entry.traits.slice(0, 5).map((trait) => (
                           <li key={trait}>{trait}</li>
@@ -4916,10 +4975,10 @@ export default function HomePage() {
           {selectedSpecies &&
             (revisedSpeciesRules
               ? SPECIES_WITH_SIZE_CHOICE.has(selectedSpecies.id) ||
-                SPECIES_WITH_SKILL_CHOICE.has(selectedSpecies.id) ||
+                selectedSpeciesSkillChoices > 0 ||
                 SPECIES_WITH_SPELL_ABILITY.has(selectedSpecies.id) ||
                 selectedSpecies.id === "human"
-              : ["half-elf"].includes(selectedSpecies.id) ||
+              : selectedSpeciesSkillChoices > 0 ||
                 character.lineageId === "variant-human") && (
               <section className="species-options-panel">
                 <div className="section-heading compact">
@@ -4959,11 +5018,9 @@ export default function HomePage() {
                         <small>Não altera seus atributos.</small>
                       </label>
                     )}
-                  {((revisedSpeciesRules &&
-                    SPECIES_WITH_SKILL_CHOICE.has(selectedSpecies.id)) ||
+                  {(selectedSpeciesSkillChoices > 0 ||
                     (!revisedSpeciesRules &&
-                      (selectedSpecies.id === "half-elf" ||
-                        character.lineageId === "variant-human"))) && (
+                      character.lineageId === "variant-human")) && (
                     <label>
                       Perícia concedida
                       <select
@@ -4976,10 +5033,7 @@ export default function HomePage() {
                         }
                       >
                         <option value="">Escolha</option>
-                        {(revisedSpeciesRules && selectedSpecies.id === "elf"
-                          ? ["Intuição", "Percepção", "Sobrevivência"]
-                          : skills.map((skill) => skill.name)
-                        ).map((skill) => (
+                        {selectedSpeciesSkillOptions.map((skill) => (
                           <option value={skill} key={skill}>
                             {skill}
                           </option>
@@ -4990,8 +5044,7 @@ export default function HomePage() {
                       </small>
                     </label>
                   )}
-                  {!revisedSpeciesRules &&
-                    selectedSpecies.id === "half-elf" && (
+                  {selectedSpeciesSkillChoices > 1 && (
                       <label>
                         Segunda perícia
                         <select
@@ -5004,9 +5057,7 @@ export default function HomePage() {
                           }
                         >
                           <option value="">Escolha</option>
-                          {skills
-                            .map((skill) => skill.name)
-                            .filter(
+                          {selectedSpeciesSkillOptions.filter(
                               (skill) =>
                                 skill !== character.speciesChoices.skill,
                             )
@@ -5017,8 +5068,8 @@ export default function HomePage() {
                             ))}
                         </select>
                         <small>
-                          Versatilidade em Perícias concede duas proficiências
-                          diferentes.
+                          {selectedSpeciesSkillProfile?.trait} concede duas
+                          proficiências diferentes.
                         </small>
                       </label>
                     )}
@@ -5264,6 +5315,13 @@ export default function HomePage() {
                       </div>
                       <span className="catalog-badge">PHB {edition}</span>
                       <p>{entry.summary}</p>
+                      <small className="class-skill-summary">
+                        Perícias iniciais: escolha {entry.skillChoices}{" "}
+                        {entry.skillChoices === 1 ? "perícia" : "perícias"}
+                        {entry.skillOptions.length
+                          ? ` entre ${entry.skillOptions.join(", ")}`
+                          : " entre todas as perícias"}
+                      </small>
                       <div className="tag-row">
                         {entry.tags.map((tag) => (
                           <span key={tag}>{tag}</span>
@@ -5405,6 +5463,76 @@ export default function HomePage() {
                             : "Disponível no nível atual da classe."}
                         </small>
                       </label>
+                      {(() => {
+                        const normalCount =
+                          entry.classId === "custom"
+                            ? character.customClass.skillChoices
+                            : (classDefinition?.skillChoices ?? 0);
+                        const required = classSkillChoiceCount(
+                          entry.classId,
+                          index === 0,
+                          normalCount,
+                        );
+                        if (!required) return null;
+                        const allowed =
+                          entry.classId === "custom" || !classDefinition?.skillOptions.length
+                            ? skills.map((skill) => skill.name)
+                            : [...classDefinition.skillOptions];
+                        const chosenByAnotherClass = new Set(
+                          classLevelEntries
+                            .filter((candidate) => candidate.id !== entry.id)
+                            .flatMap((candidate) => candidate.skillChoices ?? []),
+                        );
+                        return (
+                          <div className="class-skill-picker">
+                            <div>
+                              <span>Perícias concedidas</span>
+                              <small>
+                                {index === 0
+                                  ? `Escolha ${required} da lista da classe.`
+                                  : `Multiclasse concede ${required} perícia adicional.`}
+                              </small>
+                            </div>
+                            <div className="class-skill-selects">
+                              {Array.from({ length: required }, (_, skillIndex) => (
+                                <label key={`${entry.id}-skill-${skillIndex}`}>
+                                  <span>Escolha {skillIndex + 1}</span>
+                                  <select
+                                    value={entry.skillChoices?.[skillIndex] ?? ""}
+                                    onChange={(event) => {
+                                      const next = Array.from(
+                                        { length: required },
+                                        (_, choiceIndex) => entry.skillChoices?.[choiceIndex] ?? "",
+                                      );
+                                      next[skillIndex] = event.target.value;
+                                      updateClassEntry(entry.id, { skillChoices: next });
+                                    }}
+                                  >
+                                    <option value="">Escolha uma perícia</option>
+                                    {allowed
+                                      .filter(
+                                        (skill) =>
+                                          entry.skillChoices?.[skillIndex] === skill ||
+                                          (!entry.skillChoices?.includes(skill) &&
+                                            !chosenByAnotherClass.has(skill) &&
+                                            !speciesGrantedSkills.has(skill) &&
+                                            !backgroundGrantedSkills.has(skill)),
+                                      )
+                                      .map((skill) => (
+                                        <option value={skill} key={skill}>{skill}</option>
+                                      ))}
+                                  </select>
+                                </label>
+                              ))}
+                            </div>
+                            <p>
+                              {index === 0
+                                ? `A ficha aplicará automaticamente o bônus de proficiência nessas ${required === 1 ? "perícia" : "perícias"}.`
+                                : "As outras classes não repetem todas as perícias iniciais: somente Bardo, Patrulheiro e Ladino concedem uma escolha ao entrar por multiclasse."}
+                            </p>
+                          </div>
+                        );
+                      })()}
                       <div
                         className={`multiclass-requirement ${failure ? "failed" : "met"}`}
                       >
@@ -6020,7 +6148,7 @@ export default function HomePage() {
             )}
           {selectedBackground &&
             (selectedSpeciesSkills.some(Boolean) ||
-              fixedSpeciesSkillConflict) && (
+              fixedSpeciesSkillConflicts.length > 0) && (
               <section
                 className={`species-options-panel ${speciesSkillConflict || fixedSpeciesSkillNeedsReplacement ? "has-conflict" : ""}`}
               >
@@ -6043,15 +6171,22 @@ export default function HomePage() {
                   </span>
                 </div>
                 <div className="species-option-grid">
-                  {fixedSpeciesSkillConflict && (
-                    <label>
-                      Substituir {fixedSpeciesSkillConflict}
+                  {fixedSpeciesSkillConflicts.map((conflictingSkill, index) => (
+                    <label key={conflictingSkill}>
+                      Substituir {conflictingSkill}
                       <select
-                        value={character.speciesChoices.replacementSkill}
+                        value={
+                          index === 0
+                            ? character.speciesChoices.replacementSkill
+                            : character.speciesChoices.replacementSecondarySkill
+                        }
                         onChange={(event) =>
                           updateCharacter("speciesChoices", {
                             ...character.speciesChoices,
-                            replacementSkill: event.target.value,
+                            [index === 0
+                              ? "replacementSkill"
+                              : "replacementSecondarySkill"]:
+                              event.target.value,
                           })
                         }
                       >
@@ -6074,7 +6209,7 @@ export default function HomePage() {
                         antecedente.
                       </small>
                     </label>
-                  )}
+                  ))}
                   {selectedSpeciesSkills.map((selectedSkill, index) =>
                     selectedSkill &&
                     backgroundGrantedSkills.has(selectedSkill) ? (
@@ -7295,6 +7430,7 @@ export default function HomePage() {
                 </div>
                 {skills.map((skill) => {
                   const speciesGranted = speciesGrantedSkills.has(skill.name);
+                  const classGranted = classGrantedSkills.has(skill.name);
                   const backgroundGranted = backgroundGrantedSkills.has(
                     skill.name,
                   );
@@ -7313,12 +7449,14 @@ export default function HomePage() {
                       title={
                         speciesGranted
                           ? `Concedida por ${selectedSpecies?.name}`
+                          : classGranted
+                            ? "Concedida pela classe"
                           : backgroundGranted
                             ? `Concedida por ${selectedBackground?.name}`
                             : "Clique para alternar proficiência"
                       }
                       onClick={() => {
-                        if (!speciesGranted && !backgroundGranted)
+                        if (!speciesGranted && !classGranted && !backgroundGranted)
                           updateCharacter(
                             "proficientSkills",
                             manuallyProficient
@@ -7336,6 +7474,8 @@ export default function HomePage() {
                           {skill.ability.toUpperCase()}
                           {speciesGranted
                             ? ` · ${selectedSpecies?.name}`
+                            : classGranted
+                              ? " · classe"
                             : backgroundGranted
                               ? ` · ${selectedBackground?.name}`
                               : ""}

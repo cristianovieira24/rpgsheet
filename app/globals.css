@@ -1321,6 +1321,15 @@ h2,
 .species-card.supplement > p {
   padding-top: 6px;
 }
+.choice-card > .species-skill-summary {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 9px;
+  color: color-mix(in srgb, var(--ink) 80%, var(--muted));
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  font-size: 0.7rem;
+}
 .lineage-count {
   grid-column: 1 / -1;
   width: max-content;
@@ -1348,6 +1357,12 @@ h2,
 .class-card .tag-row {
   grid-column: 1 / -1;
   align-self: end;
+}
+.class-skill-summary {
+  grid-column: 1 / -1;
+  color: color-mix(in srgb, var(--ink) 84%, var(--muted));
+  font-size: 0.67rem;
+  line-height: 1.5;
 }
 .die-badge {
   width: 39px;
@@ -3554,6 +3569,7 @@ h2,
   gap: 10px;
   margin-top: 18px;
 }
+.class-skill-picker { grid-column:1/-1; display:grid; gap:11px; padding:14px; border:1px solid color-mix(in srgb,var(--accent) 34%,var(--line)); border-radius:13px; background:color-mix(in srgb,var(--accent) 5%,var(--surface-2)); }.class-skill-picker>div:first-child { display:flex; align-items:baseline; justify-content:space-between; gap:16px; }.class-skill-picker>div:first-child>span { color:var(--text); font:600 1rem var(--font-display); }.class-skill-picker small,.class-skill-picker p { color:var(--muted); }.class-skill-picker p { margin:0; font-size:.7rem; line-height:1.5; }.class-skill-selects { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }.class-skill-selects label { display:grid; gap:5px; color:var(--muted); font-size:.62rem; }.class-skill-selects select { width:100%; min-width:0; }
 .multiclass-entry {
   position: relative;
   display: grid;
@@ -7663,6 +7679,14 @@ h2,
   .multiclass-entry {
     grid-template-columns: 1fr;
     padding-right: 44px;
+  }
+  .class-skill-selects {
+    grid-template-columns: 1fr;
+  }
+  .class-skill-picker > div:first-child {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 4px;
   }
   .multiclass-add-panel {
     grid-template-columns: 1fr;

@@ -7,6 +7,7 @@ export type ClassLevelEntry = {
   subclassId: string;
   ruleset: Ruleset;
   level: number;
+  skillChoices: string[];
 };
 
 type ClassRequirement = {
@@ -41,6 +42,20 @@ export const classSpellAbilities: Partial<Record<string, AbilityKey>> = {
   wizard: "int",
 };
 
+export const multiclassSkillChoices: Partial<Record<string, number>> = {
+  bard: 1,
+  ranger: 1,
+  rogue: 1,
+};
+
+export function classSkillChoiceCount(
+  classId: string,
+  primary: boolean,
+  normalChoiceCount: number,
+) {
+  return primary ? normalChoiceCount : (multiclassSkillChoices[classId] ?? 0);
+}
+
 const abilityLabels: Record<AbilityKey, string> = {
   str: "Força",
   dex: "Destreza",
@@ -67,6 +82,7 @@ export function fitClassLevelsToBudget(
   const next = entries.map((entry) => ({
     ...entry,
     level: Math.max(1, Math.floor(entry.level) || 1),
+    skillChoices: Array.isArray(entry.skillChoices) ? entry.skillChoices : [],
   }));
   const preferredIndex = Math.max(
     0,
@@ -268,6 +284,11 @@ export function normalizeClassLevelEntries(
             ruleset:
               entry.ruleset === "2014" ? ("2014" as const) : ("2024" as const),
             level: Math.max(1, Math.min(20, Number(entry.level) || 1)),
+            skillChoices: Array.isArray(entry.skillChoices)
+              ? entry.skillChoices.filter(
+                  (skill): skill is string => typeof skill === "string",
+                )
+              : [],
           },
         ];
       })
@@ -296,6 +317,7 @@ export function normalizeClassLevelEntries(
       subclassId: fallback.subclassId,
       ruleset: fallback.ruleset,
       level: Math.max(1, Math.min(20, fallback.level)),
+      skillChoices: [],
     },
   ];
 }
