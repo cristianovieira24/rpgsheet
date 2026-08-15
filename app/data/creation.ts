@@ -80,6 +80,9 @@ export const classStartingEquipment: Record<string, ClassEquipment> = {
     option("a", "Pacote A", [{ name: "Adaga", quantity: 2 }, { name: "Foco arcano (cajado)" }, { name: "Robe" }, { name: "Grimório" }, { name: "Pacote de estudioso" }], 5),
     option("gold", "55 PO", [], 55),
   ] },
+  custom: { source: "Classe personalizada", options: [
+    option("gold", "125 PO", [], 125),
+  ] },
 };
 
 // PHB 2014: unlike the revised packages, these are sequential choices.  We
@@ -182,6 +185,9 @@ export const legacyClassStartingEquipment: Record<string, ClassEquipment> = {
   wizard: { source: "Livro do Jogador 2014", options: [
     ...combinations("wizard", [[{ label: "Bordão", item: "Bordão" }, { label: "Adaga", item: "Adaga" }], [{ label: "Bolsa de componentes", item: "Bolsa de componentes" }, { label: "Foco arcano", item: "Foco arcano" }], [{ label: "Pacote de estudioso", item: "Pacote de estudioso" }, { label: "Pacote de explorador", item: "Pacote de explorador" }]], [{ name: "Grimório" }]),
     wealth("4d4 × 10 PO", 4, 4, 10),
+  ] },
+  custom: { source: "Classe personalizada", options: [
+    wealth("5d4 × 10 PO", 5, 4, 10),
   ] },
 };
 
