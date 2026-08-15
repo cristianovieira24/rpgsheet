@@ -81,7 +81,14 @@ export const classStartingEquipment: Record<string, ClassEquipment> = {
     option("gold", "55 PO", [], 55),
   ] },
   custom: { source: "Classe personalizada", options: [
-    option("gold", "125 PO", [], 125),
+    {
+      id: "manual",
+      label: "Escolher itens manualmente",
+      summary:
+        "Classe personalizada: adicione os itens manualmente na ficha ou consulte o livro em que essa classe está descrita para conferir o equipamento inicial correto.",
+      items: [],
+      gp: 0,
+    },
   ] },
 };
 
@@ -187,7 +194,14 @@ export const legacyClassStartingEquipment: Record<string, ClassEquipment> = {
     wealth("4d4 × 10 PO", 4, 4, 10),
   ] },
   custom: { source: "Classe personalizada", options: [
-    wealth("5d4 × 10 PO", 5, 4, 10),
+    {
+      id: "manual",
+      label: "Escolher itens manualmente",
+      summary:
+        "Classe personalizada: adicione os itens manualmente na ficha ou consulte o livro em que essa classe está descrita para conferir o equipamento inicial correto.",
+      items: [],
+      gp: 0,
+    },
   ] },
 };
 
