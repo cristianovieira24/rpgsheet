@@ -7397,18 +7397,7 @@ export default function HomePage() {
             className="sheet-edit-button"
             aria-label="Editar ficha"
             title="Editar escolhas da ficha"
-            onClick={() => {
-              if (
-                revisedSpeciesRules &&
-                revisedClassRules &&
-                revisedBackgroundRules
-              )
-                setSheetEditOpen(true);
-              else {
-                setBuilderStep(1);
-                navigate("criador");
-              }
-            }}
+            onClick={() => setSheetEditOpen(true)}
           >
             <Pencil size={17} />
           </button>
