@@ -1919,6 +1919,9 @@ h2,
   background: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
+.sheet-line i.filled.expert {
+  box-shadow: 0 0 0 3px var(--accent-soft), 0 0 0 5px var(--accent);
+}
 .sheet-line span {
   display: flex;
   justify-content: space-between;
@@ -3220,6 +3223,15 @@ h2,
   border-color: var(--accent);
   background: var(--accent);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.proficiency-toggle-grid > button.expert {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 22%, var(--accent-soft));
+}
+.proficiency-toggle-grid > button.expert > i {
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent),
+    0 0 0 5px var(--accent);
 }
 .proficiency-toggle-grid > button > span {
   min-width: 0;

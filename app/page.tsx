@@ -409,6 +409,10 @@ const quickStatsFor = (snapshot: CharacterState) => {
       10 + wisMod +
         (snapshot.proficientSkills.includes("Percepção")
           ? proficiency(snapshot.level)
+          : 0) +
+        (snapshot.proficientSkills.includes("Percepção") &&
+        snapshot.expertSkills?.includes("Percepção")
+          ? proficiency(snapshot.level)
           : 0),
   };
 };
@@ -485,6 +489,7 @@ type CharacterState = {
   tempHp: number;
   inspiration: boolean;
   proficientSkills: string[];
+  expertSkills: string[];
   suppressedProficientSkills: string[];
   proficientSavingThrows: AbilityKey[];
   suppressedSavingThrows: AbilityKey[];
@@ -609,6 +614,7 @@ const defaultCharacter: CharacterState = {
   tempHp: 0,
   inspiration: false,
   proficientSkills: [],
+  expertSkills: [],
   suppressedProficientSkills: [],
   proficientSavingThrows: [],
   suppressedSavingThrows: [],
@@ -1248,6 +1254,11 @@ function normalizeCharacterData(raw: Partial<CharacterState>): CharacterState {
       : [],
     proficientSkills: Array.isArray(raw.proficientSkills)
       ? raw.proficientSkills.filter(
+          (entry): entry is string => typeof entry === "string",
+        )
+      : [],
+    expertSkills: Array.isArray(raw.expertSkills)
+      ? raw.expertSkills.filter(
           (entry): entry is string => typeof entry === "string",
         )
       : [],
@@ -2400,23 +2411,59 @@ export default function HomePage() {
   const toggleSkillProficiency = (skillName: string) => {
     const automatic = automaticProficientSkills.has(skillName);
     setCharacter((current) => {
+      const isExpert = current.expertSkills.includes(skillName);
       if (automatic) {
         const suppressed = current.suppressedProficientSkills.includes(skillName);
+        if (suppressed) {
+          return {
+            ...current,
+            suppressedProficientSkills:
+              current.suppressedProficientSkills.filter(
+                (entry) => entry !== skillName,
+              ),
+            expertSkills: current.expertSkills.filter(
+              (entry) => entry !== skillName,
+            ),
+          };
+        }
+        if (!isExpert) {
+          return {
+            ...current,
+            expertSkills: [...current.expertSkills, skillName],
+          };
+        }
         return {
           ...current,
-          suppressedProficientSkills: suppressed
-            ? current.suppressedProficientSkills.filter(
-                (entry) => entry !== skillName,
-              )
-            : [...current.suppressedProficientSkills, skillName],
+          expertSkills: current.expertSkills.filter(
+            (entry) => entry !== skillName,
+          ),
+          suppressedProficientSkills: [
+            ...current.suppressedProficientSkills,
+            skillName,
+          ],
         };
       }
       const selected = current.proficientSkills.includes(skillName);
+      if (!selected) {
+        return {
+          ...current,
+          proficientSkills: [...current.proficientSkills, skillName],
+        };
+      }
+      if (!isExpert) {
+        return {
+          ...current,
+          expertSkills: [...current.expertSkills, skillName],
+        };
+      }
       return {
         ...current,
-        proficientSkills: selected
-          ? current.proficientSkills.filter((entry) => entry !== skillName)
-          : [...current.proficientSkills, skillName],
+        proficientSkills: current.proficientSkills.filter(
+          (entry) => entry !== skillName,
+        ),
+        expertSkills: current.expertSkills.filter(
+          (entry) => entry !== skillName,
+        ),
       };
     });
   };
@@ -2449,6 +2496,10 @@ export default function HomePage() {
     10 +
       modifier(finalAbilities.wis) +
       (effectiveProficientSkills.has("Percepção") ? pb : 0) +
+      (effectiveProficientSkills.has("Percepção") &&
+      character.expertSkills.includes("Percepção")
+        ? pb
+        : 0) +
       (overrides.skillBonuses.Percepção ?? 0);
   const selectedSpells = allSpells.filter((spell) =>
     character.selectedSpellIds.includes(spell.id),
@@ -7643,10 +7694,13 @@ export default function HomePage() {
                   const suppressed =
                     character.suppressedProficientSkills.includes(skill.name);
                   const proficient = effectiveProficientSkills.has(skill.name);
+                  const isExpert =
+                    proficient && character.expertSkills.includes(skill.name);
                   const extra = overrides.skillBonuses[skill.name] ?? 0;
                   const value =
                     modifier(finalAbilities[skill.ability]) +
                     (proficient ? pb : 0) +
+                    (isExpert ? pb : 0) +
                     extra;
                   return (
                     <button
@@ -7655,17 +7709,21 @@ export default function HomePage() {
                       title={
                         suppressed
                           ? "Proficiência automática desativada. Clique para restaurar."
+                          : isExpert
+                          ? "Especializada (perícia dobrada). Clique para remover."
+                          : proficient
+                          ? "Proficiente. Clique de novo para especializar (perícia dobrada)."
                           : speciesGranted
                           ? `Concedida por ${selectedSpecies?.name}. Clique para ajustar.`
                           : classGranted
                             ? "Concedida pela classe. Clique para ajustar."
                           : backgroundGranted
                             ? `Concedida por ${selectedBackground?.name}. Clique para ajustar.`
-                            : "Clique para alternar proficiência"
+                            : "Clique para treinar. Clique de novo para especializar."
                       }
                       onClick={() => toggleSkillProficiency(skill.name)}
                     >
-                      <i className={proficient ? "filled" : ""} />
+                      <i className={isExpert ? "filled expert" : proficient ? "filled" : ""} />
                       <span>
                         {skill.name}
                         <small>
@@ -7678,8 +7736,9 @@ export default function HomePage() {
                               ? ` · ${selectedBackground?.name}`
                               : manuallyProficient
                                 ? " · manual"
-                              : ""}
+                                : ""}
                           {suppressed ? " · desativada" : ""}
+                          {isExpert ? " · especializada" : ""}
                         </small>
                       </span>
                       <strong>{signed(value)}</strong>
@@ -12298,6 +12357,8 @@ export default function HomePage() {
                   const automatic = automaticProficientSkills.has(skill.name);
                   const suppressed =
                     character.suppressedProficientSkills.includes(skill.name);
+                  const isExpert =
+                    active && character.expertSkills.includes(skill.name);
                   const sources = [
                     speciesGrantedSkills.has(skill.name)
                       ? selectedSpecies?.name
@@ -12310,8 +12371,17 @@ export default function HomePage() {
                   return (
                     <button
                       key={skill.name}
-                      className={active ? "active" : ""}
+                      className={
+                        isExpert ? "active expert" : active ? "active" : ""
+                      }
                       aria-pressed={active}
+                      title={
+                        isExpert
+                          ? "Especializada (perícia dobrada). Clique para remover."
+                          : active
+                            ? "Proficiente. Clique de novo para especializar (perícia dobrada)."
+                            : "Clique para treinar."
+                      }
                       onClick={() => toggleSkillProficiency(skill.name)}
                     >
                       <i />
@@ -12323,6 +12393,7 @@ export default function HomePage() {
                             : active
                               ? "Adicionada manualmente"
                               : skill.ability.toUpperCase()}
+                          {isExpert ? " · especializada" : ""}
                         </small>
                       </span>
                     </button>
@@ -12649,7 +12720,11 @@ export default function HomePage() {
                       automatic:
                         10 +
                         modifier(finalAbilities.wis) +
-                        (effectiveProficientSkills.has("Percepção") ? pb : 0),
+                        (effectiveProficientSkills.has("Percepção") ? pb : 0) +
+                        (effectiveProficientSkills.has("Percepção") &&
+                        character.expertSkills.includes("Percepção")
+                          ? pb
+                          : 0),
                     },
                     {
                       key: "maxHp",
